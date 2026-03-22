@@ -7,10 +7,22 @@ import {
   Image as ImageIcon, Download, Upload 
 } from 'lucide-react';
 
-// --- APUFUNKTIOT JA ASETUKSET ---
+/**
+ * NEXUS INTELLIGENCE PLATFORM - GOTHAM EDITION
+ * -------------------------------------------
+ * Täysimittainen tiedustelu- ja analyysialusta.
+ * - Graafipohjainen verkostoanalyysi (Semantic Zoom)
+ * - Geospatiaalinen Web Mercator -karttamoottori (OSM)
+ * - Gemini 3 Preview AI -integraatio (NLP & OSINT)
+ * - Ontologiapohjainen tiedonhallinta
+ */
+
+// --- APUFUNKTIOT JA VAKIOIDEN MÄÄRITTELY ---
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
+// API-asetukset
 const apiKey = "AIzaSyAZ5mawe0picS8FEkUawxK-w83JLD6nKS8"; 
+const MODEL_NAME = "gemini-3-flash-preview";
 
 const getNodeIcon = (type) => {
   switch (type) {
@@ -41,13 +53,17 @@ const getRiskColor = (risk) => {
   }
 };
 
-const fetchWithBackoff = async (url, options, retries = 3, delay = 1000) => {
+// API-kutsujen retry-logiikka. Eksponentiaalinen viive.
+const fetchWithBackoff = async (url, options, retries = 4, delay = 1500) => {
   try {
     const res = await fetch(url, options);
-    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    if (!res.ok) {
+      throw new Error(`HTTP-virhe! Status: ${res.status}`);
+    }
     return res;
   } catch (error) {
     if (retries > 0) {
+      console.warn(`API-raja tai verkkovirhe. Odotetaan ${delay}ms ja yritetään uudelleen...`);
       await new Promise(r => setTimeout(r, delay));
       return fetchWithBackoff(url, options, retries - 1, delay * 2);
     }
@@ -55,7 +71,42 @@ const fetchWithBackoff = async (url, options, retries = 3, delay = 1000) => {
   }
 };
 
-// --- WEB MERCATOR -PROJEKTIOT (Aitojen koordinaattien muunnos) ---
+// --- VERKKOHAKU (WEB SCRAPING) ---
+// Haetaan hakutulokset ensin erikseen avoimen proxyn kautta välttäen evästemuurit, minkä jälkeen AI analysoi pelkän tekstin.
+const fetchWebData = async (query) => {
+  try {
+    const url = `https://api.allorigins.win/get?url=${encodeURIComponent('https://html.duckduckgo.com/html/?q=' + query)}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(data.contents, 'text/html');
+    let text = Array.from(doc.querySelectorAll('.result__snippet')).map(el => el.textContent).join('\n');
+    if (!text) {
+       text = doc.body.textContent.replace(/\s+/g, ' ').substring(0, 5000);
+    }
+    return text || "Ei merkittäviä hakutuloksia.";
+  } catch (e) {
+    console.error("Web-haun virhe:", e);
+    return "Hakutulosten nouto epäonnistui.";
+  }
+};
+
+// Älykäs Gemini API -kääre (EI KÄYTETÄ GEMININ OMAA GOOGLE-TYÖKALUA, VAIN TEKSTIANALYYSIÄ)
+const callGemini = async (prompt, jsonMode = false) => {
+  const payload = { contents: [{ parts: [{ text: prompt }] }] };
+  if (jsonMode) payload.generationConfig = { responseMimeType: "application/json" };
+  
+  const response = await fetchWithBackoff(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json();
+  if (!data.candidates) throw new Error("API palautti tyhjän vastauksen.");
+  return data.candidates[0].content.parts[0].text;
+};
+
+// --- GEOSPATIAALINEN MATEMATIIKKA (Web Mercator -projektio) ---
 const getMapX = (lng) => ((lng + 180) / 360) * 256;
 const getMapY = (lat) => {
   const latRad = lat * Math.PI / 180;
@@ -70,55 +121,57 @@ const reverseMapYToLat = (y) => {
 
 const getOntologyProperties = (type) => {
   switch (type) {
-    case 'person': return { nationality: '', ssn: '', aliases: '' };
-    case 'org': return { registryNumber: '', industry: '', founded: '' };
-    case 'location': return { address: '', coordinates: '', accessLevel: '' };
-    case 'event': return { date: '', status: '', severity: '' };
+    case 'person': return { 'kansalaisuus': '', 'henkilötunnus': '', 'aliakset': '' };
+    case 'org': return { 'y-tunnus': '', 'toimiala': '', 'perustettu': '' };
+    case 'location': return { 'osoite': '', 'turvataso': '', 'koordinaatit': '' };
+    case 'event': return { 'päivämäärä': '', 'tila': '', 'vakavuus': '' };
     default: return {};
   }
 };
 
+// --- ALKUDATA (Esimerkkikohteet Porissa) ---
 const defaultNodes = [
   { 
     id: '1', label: 'Matti Virtanen', type: 'person', 
-    x: 400, y: 300, lat: 60.1699, lng: 24.9384, date: '2023-10-15',
-    info: 'Epäilty päätekijä. Aloita tutkinta tästä.', risk: 'high',
-    properties: { nationality: 'Suomi', ssn: '151080-XXXX', aliases: 'MaZa' }
+    x: 400, y: 300, lat: 61.4978, lng: 21.7972, date: '2023-10-15',
+    info: 'Kohdehenkilö. Epäilty kytköksistä varjotalouteen.', risk: 'high',
+    properties: { 'kansalaisuus': 'Suomi', 'henkilötunnus': '151080-XXXX', 'aliakset': 'MaZa' }
   },
   { 
-    id: '2', label: 'Satama B', type: 'location', 
-    x: 200, y: 400, lat: 60.1550, lng: 24.9500, date: '2023-10-12',
-    info: 'Havaittu epämääräistä toimintaa.', risk: 'medium',
-    properties: { address: 'Satamakatu 1', coordinates: '60.1550, 24.9500', accessLevel: 'Rajoitettu' }
+    id: '2', label: 'Logistiikkakeskus A', type: 'location', 
+    x: 200, y: 400, lat: 61.4851, lng: 21.7974, date: '2023-10-12',
+    info: 'Keskeinen solmupiste tavaravirroissa.', risk: 'medium',
+    properties: { 'osoite': 'Yrjönkatu 1', 'turvataso': 'Rajoitettu', 'koordinaatit': '61.4851, 21.7974' }
   }
 ];
 
 const defaultEdges = [
-  { source: '1', target: '2', label: 'Havaittu alueella', date: '2023-10-14' }
+  { source: '1', target: '2', label: 'Vieraillut kohteessa', date: '2023-10-14' }
 ];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('graph');
   
-  const [nodes, setNodes] = useState(() => JSON.parse(localStorage.getItem('nexus_nodes_v2')) || defaultNodes);
-  const [edges, setEdges] = useState(() => JSON.parse(localStorage.getItem('nexus_edges_v2')) || defaultEdges);
-  const [mapBackground, setMapBackground] = useState(() => localStorage.getItem('nexus_map_bg_v2') || null);
-  const [showRealMap, setShowRealMap] = useState(() => JSON.parse(localStorage.getItem('nexus_realmap_v2')) || false);
+  // Sovelluksen tila (ladataan tallennuksesta)
+  const [nodes, setNodes] = useState(() => JSON.parse(localStorage.getItem('nexus_nodes_v7')) || defaultNodes);
+  const [edges, setEdges] = useState(() => JSON.parse(localStorage.getItem('nexus_edges_v7')) || defaultEdges);
+  const [mapBackground, setMapBackground] = useState(() => localStorage.getItem('nexus_map_bg_v7') || null);
+  const [showRealMap, setShowRealMap] = useState(() => JSON.parse(localStorage.getItem('nexus_realmap_v7')) || false);
   
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  
   const [alerts, setAlerts] = useState([]);
   const [showAlerts, setShowAlerts] = useState(false);
+  const [customKeywords, setCustomKeywords] = useState(''); // UUSI: Omat hakusanat
   
-  // Alustetaan kamerat älykkäästi (Karttakamera keskitetään Suomeen oletuksena)
+  // Kameroiden hallinta
   const [cameras, setCameras] = useState(() => {
     const w = typeof window !== 'undefined' ? window.innerWidth : 1200;
     const h = typeof window !== 'undefined' ? window.innerHeight : 800;
-    const initZoom = 8000;
+    const initMapZoom = 35000;
     return {
       graph: { x: 0, y: 0, zoom: 1 },
-      map: { x: w / 2 - getMapX(24.9384) * initZoom, y: h / 2 - getMapY(60.1699) * initZoom, zoom: initZoom }
+      map: { x: w / 2 - getMapX(21.7972) * initMapZoom, y: h / 2 - getMapY(61.4978) * initMapZoom, zoom: initMapZoom }
     };
   });
   
@@ -143,223 +196,106 @@ export default function App() {
 
   const svgRef = useRef(null);
 
+  // Synkronointi LocalStorageen ja automaattiset järjestelmähälytykset
   useEffect(() => {
-    localStorage.setItem('nexus_nodes_v2', JSON.stringify(nodes));
-    localStorage.setItem('nexus_edges_v2', JSON.stringify(edges));
-    localStorage.setItem('nexus_realmap_v2', JSON.stringify(showRealMap));
+    localStorage.setItem('nexus_nodes_v7', JSON.stringify(nodes));
+    localStorage.setItem('nexus_edges_v7', JSON.stringify(edges));
+    localStorage.setItem('nexus_realmap_v7', JSON.stringify(showRealMap));
+    if (mapBackground) { try { localStorage.setItem('nexus_map_bg_v7', mapBackground); } catch(e) {} }
 
-    try {
-      if (mapBackground) localStorage.setItem('nexus_map_bg_v2', mapBackground);
-      else localStorage.removeItem('nexus_map_bg_v2');
-    } catch (e) {
-      console.warn("Karttakuva liian suuri.");
-    }
-
+    // Älykäs analyysi: havaitse riskialttiit kytkökset
     const newAlerts = [];
     edges.forEach(edge => {
-      const source = nodes.find(n => n.id === edge.source);
-      const target = nodes.find(n => n.id === edge.target);
-      if (source && target && source.risk === 'high' && ['location', 'event'].includes(target.type)) {
-        newAlerts.push({ id: `${source.id}-${target.id}`, level: 'critical', message: `Kriittinen yhteys: Korkean riskin kohde (${source.label}) kytkeytyy solmuun ${target.label}.` });
+      const s = nodes.find(n => n.id === edge.source);
+      const t = nodes.find(n => n.id === edge.target);
+      if (s && t && s.risk === 'high' && ['location', 'event'].includes(t.type)) {
+        newAlerts.push({ 
+          id: `${s.id}-${t.id}`, 
+          level: 'critical', 
+          message: `VAROITUS: Korkean riskin entiteetti ${s.label} kytkeytyy kohteeseen ${t.label}.` 
+        });
       }
     });
-
-    nodes.forEach(node => {
-      if (node.risk === 'high' && !edges.some(e => e.source === node.id || e.target === node.id)) {
-        newAlerts.push({ id: `isolated-${node.id}`, level: 'warning', message: `Havaittu eristetty korkean riskin kohde: ${node.label}. Suosittelemme OSINT-tiedustelua.` });
-      }
-    });
-
     if (JSON.stringify(alerts.map(a=>a.id)) !== JSON.stringify(newAlerts.map(a=>a.id))) setAlerts(newAlerts);
   }, [nodes, edges, mapBackground, showRealMap]);
 
-  // Hakee näytöllä näkyvät OpenStreetMap-tiilet lennosta!
+  // Dynaaminen OpenStreetMap-tiilien lataus
   const getVisibleTiles = () => {
     if (activeTab !== 'map' || !showRealMap) return [];
-    
-    // Määritetään oikea OSM zoomaustaso (0-19) SVG:n zoomauskertoimesta
     const z = Math.max(0, Math.min(19, Math.floor(Math.log2(camera.zoom))));
-    const tileSizeWorld = 256 / Math.pow(2, z);
+    const numTiles = Math.pow(2, z);
+    const tileSizeWorld = 256 / numTiles;
     
-    const windowW = window.innerWidth || 1920;
-    const windowH = window.innerHeight || 1080;
-    
+    const w = window.innerWidth;
+    const h = window.innerHeight;
     const minWX = -camera.x / camera.zoom;
     const minWY = -camera.y / camera.zoom;
-    const maxWX = (windowW - camera.x) / camera.zoom;
-    const maxWY = (windowH - camera.y) / camera.zoom;
+    const maxWX = (w - camera.x) / camera.zoom;
+    const maxWY = (h - camera.y) / camera.zoom;
     
     const minTx = Math.max(0, Math.floor(minWX / tileSizeWorld));
     const minTy = Math.max(0, Math.floor(minWY / tileSizeWorld));
-    const maxTx = Math.min(Math.pow(2, z) - 1, Math.floor(maxWX / tileSizeWorld));
-    const maxTy = Math.min(Math.pow(2, z) - 1, Math.floor(maxWY / tileSizeWorld));
+    const maxTx = Math.min(numTiles - 1, Math.floor(maxWX / tileSizeWorld));
+    const maxTy = Math.min(numTiles - 1, Math.floor(maxWY / tileSizeWorld));
     
     const tiles = [];
     let count = 0;
     for (let x = minTx; x <= maxTx; x++) {
       for (let y = minTy; y <= maxTy; y++) {
-        if (count++ < 200) tiles.push({ x, y, z }); // Estetään selaimen kaatuminen yli-zoomauksissa
+        if (count++ < 250) tiles.push({ x, y, z });
       }
     }
     return tiles;
   };
 
+  // --- NÄKYMÄN HALLINTA (ZOOM & PAN) ---
   const performZoom = (zoomFactor, centerX, centerY) => {
     updateCamera(prev => {
       let newZoom = prev.zoom * zoomFactor;
-      // Karttatilassa zoomaus voi olla valtava (jotta katutaso näkyy)
-      const maxZoom = activeTab === 'map' ? 5000000 : 200;
-      const minZoom = activeTab === 'map' ? 10 : 0.05;
-      newZoom = Math.max(minZoom, Math.min(newZoom, maxZoom));
-      
-      const worldX = (centerX - prev.x) / prev.zoom;
-      const worldY = (centerY - prev.y) / prev.zoom;
-      
-      const newX = centerX - worldX * newZoom;
-      const newY = centerY - worldY * newZoom;
-      
-      return { x: newX, y: newY, zoom: newZoom };
+      const maxZ = activeTab === 'map' ? 10000000 : 500;
+      const minZ = activeTab === 'map' ? 50 : 0.05;
+      newZoom = Math.max(minZ, Math.min(newZoom, maxZ));
+      const wX = (centerX - prev.x) / prev.zoom;
+      const wY = (centerY - prev.y) / prev.zoom;
+      return { x: centerX - wX * newZoom, y: centerY - wY * newZoom, zoom: newZoom };
     });
   };
 
   const handleWheel = (e) => {
-    e.preventDefault();
     if (!svgRef.current) return;
-    const svgRect = svgRef.current.getBoundingClientRect();
-    const mouseX = e.clientX - svgRect.left;
-    const mouseY = e.clientY - svgRect.top;
-    const zoomSensitivity = 0.001;
-    const delta = -e.deltaY * zoomSensitivity;
-    performZoom(1 + delta, mouseX, mouseY);
+    const rect = svgRef.current.getBoundingClientRect();
+    performZoom(1 + (-e.deltaY * 0.001), e.clientX - rect.left, e.clientY - rect.top);
   };
 
-  const handleZoomInButton = () => {
-    if(svgRef.current) {
-      const rect = svgRef.current.getBoundingClientRect();
-      performZoom(1.5, rect.width / 2, rect.height / 2);
-    }
-  };
-
-  const handleZoomOutButton = () => {
-    if(svgRef.current) {
-      const rect = svgRef.current.getBoundingClientRect();
-      performZoom(1 / 1.5, rect.width / 2, rect.height / 2);
-    }
-  };
-
-  const handleMouseDownNode = (e, nodeId) => {
-    e.stopPropagation();
-    setDraggingNode(nodeId);
-    setIsDragged(false);
-  };
-
+  const handleMouseDownNode = (e, id) => { e.stopPropagation(); setDraggingNode(id); setIsDragged(false); };
   const handleMouseDownCanvas = () => setIsPanning(true);
-
   const handleMouseMove = useCallback((e) => {
     if (draggingNode && activeTab === 'graph') {
       setIsDragged(true);
-      const movementX = e.movementX / camera.zoom;
-      const movementY = e.movementY / camera.zoom;
-      setNodes(prev => prev.map(n => 
-        n.id === draggingNode ? { ...n, x: n.x + movementX, y: n.y + movementY } : n
-      ));
+      setNodes(prev => prev.map(n => n.id === draggingNode ? { ...n, x: n.x + e.movementX/camera.zoom, y: n.y + e.movementY/camera.zoom } : n));
     } else if (isPanning) {
       updateCamera(prev => ({ ...prev, x: prev.x + e.movementX, y: prev.y + e.movementY }));
     }
   }, [draggingNode, isPanning, camera.zoom, activeTab]);
 
-  const handleMouseUp = () => {
-    setDraggingNode(null);
-    setIsPanning(false);
-    setTimeout(() => setIsDragged(false), 50);
-  };
+  const handleMouseUp = () => { setDraggingNode(null); setIsPanning(false); setTimeout(() => setIsDragged(false), 50); };
+  const handleNodeClick = (e, id) => { e.stopPropagation(); if (!isDragged) setSelectedNodeId(prev => prev === id ? null : id); };
+  const handleBackgroundClick = () => { if (!isDragged && !isPanning) setSelectedNodeId(null); };
 
-  const handleNodeClick = (e, nodeId) => {
-    e.stopPropagation();
-    if (!isDragged) setSelectedNodeId(prev => prev === nodeId ? null : nodeId);
-  };
-
-  const handleBackgroundClick = () => {
-    if (!isDragged && !isPanning) setSelectedNodeId(null);
-  };
-
-  const exportSession = () => {
-    const sessionData = { nodes, edges, mapBackground, showRealMap };
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(sessionData));
-    const downloadAnchorNode = document.createElement('a');
-    downloadAnchorNode.setAttribute("href", dataStr);
-    downloadAnchorNode.setAttribute("download", `nexus_session_${new Date().toISOString().split('T')[0]}.json`);
-    document.body.appendChild(downloadAnchorNode);
-    downloadAnchorNode.click();
-    downloadAnchorNode.remove();
-  };
-
-  const importSession = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const session = JSON.parse(event.target.result);
-        if (session.nodes) setNodes(session.nodes);
-        if (session.edges) setEdges(session.edges);
-        if (session.mapBackground !== undefined) setMapBackground(session.mapBackground);
-        if (session.showRealMap !== undefined) setShowRealMap(session.showRealMap);
-        alert("Sessio ladattu onnistuneesti!");
-      } catch (err) {
-        alert("Virhe tiedoston lukemisessa. Varmista että kyseessä on oikea .json-tiedosto.");
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = '';
-  };
-
-  const clearSession = () => {
-    if (window.confirm("Haluatko varmasti tyhjentää koko session? Kaikki tiedot poistetaan pysyvästi.")) {
-      localStorage.removeItem('nexus_nodes_v2');
-      localStorage.removeItem('nexus_edges_v2');
-      localStorage.removeItem('nexus_map_bg_v2');
-      setNodes(defaultNodes);
-      setEdges(defaultEdges);
-      setMapBackground(null);
-      setSelectedNodeId(null);
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      setCameras({ graph: { x: 0, y: 0, zoom: 1 }, map: { x: w/2 - getMapX(24.94)*8000, y: h/2 - getMapY(60.16)*8000, zoom: 8000 } });
-      setSearchQuery('');
-    }
-  };
-
-  const handleMapBgUpload = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => setMapBackground(event.target.result);
-    reader.readAsDataURL(file);
-  };
-
+  // --- ENTITEETTIEN HALLINTA ---
   const addNewNode = () => {
-    const worldX = (-camera.x + window.innerWidth / 2) / camera.zoom;
-    const worldY = (-camera.y + window.innerHeight / 2) / camera.zoom;
-    
-    let newLat = 60 + (Math.random() * 2 - 1);
-    let newLng = 24 + (Math.random() * 2 - 1);
-    
-    // Jos olemme karttatilassa, uusi solmu tippuu TARKALLEEN siihen missä kamera on
-    if (activeTab === 'map') {
-        newLng = reverseMapXToLng(worldX);
-        newLat = reverseMapYToLat(worldY);
-    }
-
-    const newNode = {
-      id: generateId(), label: 'Uusi Entiteetti', type: 'person',
-      x: worldX, y: worldY, lat: newLat, lng: newLng,
-      date: new Date().toISOString().split('T')[0],
-      info: 'Uusi manuaalisesti luotu entiteetti.', risk: 'low',
+    const wX = (-camera.x + window.innerWidth / 2) / camera.zoom;
+    const wY = (-camera.y + window.innerHeight / 2) / camera.zoom;
+    const node = {
+      id: generateId(), label: 'Uusi Kohde', type: 'person',
+      x: wX, y: wY, 
+      lat: activeTab === 'map' ? reverseMapYToLat(wY) : 61.4, 
+      lng: activeTab === 'map' ? reverseMapXToLng(wX) : 21.8,
+      date: new Date().toISOString().split('T')[0], info: 'Lisätty manuaalisesti kankaalle.', risk: 'low',
       properties: getOntologyProperties('person')
     };
-    setNodes([...nodes, newNode]);
-    setSelectedNodeId(newNode.id);
+    setNodes([...nodes, node]);
+    setSelectedNodeId(node.id);
   };
 
   const deleteNode = (id) => {
@@ -368,245 +304,328 @@ export default function App() {
     if (selectedNodeId === id) setSelectedNodeId(null);
   };
 
-  const updateNodeProperty = (id, field, value) => {
-    setNodes(nodes.map(n => n.id === id ? { ...n, properties: { ...n.properties, [field]: value } } : n));
+  const clearSession = () => {
+    if (window.confirm("Haluatko varmasti tyhjentää koko session?")) {
+      localStorage.clear();
+      window.location.reload();
+    }
   };
 
-  // --- API / SIMULAATIO INTEGRAATIOT ---
-  const ingestDocument = async () => { /* ... (Säilytetty ennallaan) ... */ };
-  const transformAIOsint = async (sourceNode) => { /* ... (Säilytetty ennallaan) ... */ };
-  const transformFindCompanies = async (sourceNode) => { /* ... (Säilytetty ennallaan) ... */ };
-  const transformWikipediaSearch = async (sourceNode) => { /* ... (Säilytetty ennallaan) ... */ };
+  const exportSession = () => {
+    const data = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ nodes, edges, showRealMap }));
+    const link = document.createElement('a');
+    link.setAttribute("href", data);
+    link.setAttribute("download", `nexus_export_${new Date().getTime()}.json`);
+    link.click();
+  };
+
+  const importSession = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const s = JSON.parse(ev.target.result);
+        if (s.nodes) setNodes(s.nodes);
+        if (s.edges) setEdges(s.edges);
+        alert("Sessio ladattu.");
+      } catch(e) { alert("Tiedosto on virheellinen."); }
+    };
+    reader.readAsText(file);
+  };
+
+  // --- TEKOÄLY-INTEGRAATIOT ---
+  
+  const ingestDocument = async () => {
+    if (!nlpInputText.trim()) return;
+    setIsNlpModalOpen(false);
+    setLoadingText('Nexus AI analysoi dokumenttia ja rakentaa verkkoa...');
+    setIsLoading(true);
+
+    try {
+      const prompt = `Analysoi teksti ja poimi tärkeimmät entiteetit ja niiden väliset suhteet. Palauta VASTAUS PELKKÄNÄ JSONINA ilman markdown-tageja. Käytä tätä tiukkaa rakennetta: {"nodes": [{"id": "n1", "label": "Nimi", "type": "person/org/location", "info": "Kuvaus", "lat": 61.4, "lng": 21.7, "risk": "low/medium/high"}], "edges": [{"source": "n1", "target": "n2", "label": "Tähän selkeä lyhyt suhde, esim. 'Omistaja'"}]}. Teksti: ${nlpInputText}`;
+      
+      const rawText = await callGemini(prompt, true); // Ei hakua, käytetään JSON modea
+      const jsonMatch = rawText.match(/\{[\s\S]*"nodes"[\s\S]*"edges"[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("Ei JSON-verkkoa.");
+      
+      const graph = JSON.parse(jsonMatch[0]);
+      
+      const idMap = {};
+      const newNodes = (graph.nodes || []).map(ent => {
+        const newId = generateId();
+        idMap[ent.id] = newId;
+        return {
+          id: newId, label: ent.label, type: ent.type || 'person',
+          x: (-camera.x + 500) / camera.zoom + (Math.random()*300-150),
+          y: (-camera.y + 400) / camera.zoom + (Math.random()*300-150),
+          lat: ent.lat || 61.4, lng: ent.lng || 21.7, date: new Date().toISOString().split('T')[0],
+          info: ent.info, risk: ent.risk || 'medium', properties: getOntologyProperties(ent.type || 'person')
+        };
+      });
+
+      const newEdges = (graph.edges || []).map(edge => ({
+        source: idMap[edge.source] || edge.source,
+        target: idMap[edge.target] || edge.target,
+        label: edge.label || 'Yhteys havaittu',
+        date: new Date().toISOString().split('T')[0]
+      }));
+
+      if (selectedNodeId && newNodes.length > 0) {
+        newEdges.push({ source: selectedNodeId, target: newNodes[0].id, label: 'Mainittu dokumentissa', date: new Date().toISOString().split('T')[0] });
+      }
+
+      setNodes(prev => [...prev, ...newNodes]);
+      setEdges(prev => [...prev, ...newEdges]);
+      setNlpInputText('');
+    } catch (e) { 
+      console.error("NLP Virhe:", e); 
+      alert("Tekoälyanalyysi epäonnistui. Tarkista syötetty teksti."); 
+    }
+    finally { setIsLoading(false); }
+  };
+
+  const transformAIOsint = async (node) => {
+    if (!apiKey) { alert("API-avain puuttuu."); return; }
+    setLoadingText(`Kerätään hakutietoja verkosta kohteelle: ${node.label}...`);
+    setIsLoading(true);
+    try {
+      // 1. Suoritetaan erillinen verkkohaku käyttäen omia lisähakusanoja jos niitä on
+      const query = `${node.label} tiedustelu uutiset ${customKeywords}`.trim();
+      const searchResults = await fetchWebData(query);
+      
+      // 2. Annetaan raakateksti tekoälyn analysoitavaksi
+      const prompt = `Tee tiivistetty tiedusteluanalyysi (max 5 lausetta) kohteesta: ${node.label} (${node.type}). Käytä analyysissä VAIN näitä hakutuloksia:\n\n${searchResults}\n\nJos hakutuloksia on vähän, tee paras arviosi.`;
+      
+      const report = await callGemini(prompt, false); 
+      setNodes(prev => prev.map(n => n.id === node.id ? { ...n, info: report } : n));
+    } catch (e) { 
+      console.error("OSINT-virhe:", e); 
+      alert("OSINT-analyysi epäonnistui. Palvelin saattaa olla ruuhkautunut."); 
+    }
+    finally { setIsLoading(false); }
+  };
+
+  const transformWikipedia = async (node) => {
+    setLoadingText(`Haetaan Wikipedia-profiilia: ${node.label}...`);
+    setIsLoading(true);
+    try {
+      const res = await fetch(`https://fi.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(node.label)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setNodes(prev => prev.map(n => n.id === node.id ? { ...n, info: data.extract } : n));
+      } else { alert("Ei Wikipedia-artikkelia löytynyt."); }
+    } catch (e) { alert("Yhteysvirhe Wikipediaan."); }
+    finally { setIsLoading(false); }
+  };
+
+  const transformFindConnections = async (node) => {
+    if (!apiKey) { alert("API-avain puuttuu."); return; }
+    setLoadingText(`Etsitään kytköksiä verkosta: ${node.label}...`);
+    setIsLoading(true);
+    try {
+      // 1. Suoritetaan erillinen verkkohaku kytköksistä omien lisähakusanojen kanssa
+      const query = `${node.label} yritys hallitus omistaja kytkökset ${customKeywords}`.trim();
+      const searchResults = await fetchWebData(query);
+
+      // 2. Analysoidaan teksti tekoälyllä ja palautetaan JSON
+      const prompt = `Analysoi seuraavat hakutulokset ja etsi niistä todellisia yrityksiä, organisaatioita tai ihmisiä, jotka liittyvät kohteeseen "${node.label}". 
+      Palauta VASTAUS PELKKÄNÄ JSON-LISTANA. Formatti: [{"name": "Yritys Oy", "role": "Tähän lyhyt selkeä suhde (esim. Hallituksen jäsen, Omistaja)", "type": "org" tai "person", "info": "Miksi liittyy"}]. 
+      Jos et löydä selkeitä kytköksiä, palauta tyhjä lista []. Älä kirjoita muuta tekstiä kuin puhdas JSON-taulukko.
+      
+      Hakutulokset:
+      ${searchResults}`;
+      
+      const rawText = await callGemini(prompt, false); 
+      
+      const jsonMatch = rawText.match(/\[\s*\{[\s\S]*\}\s*\]/);
+      if (!jsonMatch) {
+          alert("Ei selkeitä kytköksiä löydetty nykyisillä hakutuloksilla.");
+          return;
+      }
+      
+      const results = JSON.parse(jsonMatch[0]);
+      
+      const newNodes = [];
+      const newEdges = [];
+      
+      results.forEach((res, index) => {
+        const id = generateId();
+        // Levitellään uudet pallot nätisti säteittäisesti
+        const angle = (index / results.length) * Math.PI * 2;
+        const radius = 150 + Math.random() * 50;
+        
+        newNodes.push({
+          id, label: res.name, type: res.type || 'org',
+          x: node.x + Math.cos(angle) * radius, 
+          y: node.y + Math.sin(angle) * radius,
+          lat: node.lat + (Math.random()*0.02 - 0.01), 
+          lng: node.lng + (Math.random()*0.02 - 0.01), 
+          date: new Date().toISOString().split('T')[0],
+          info: res.info || `Löydetty OSINT-kytkös.`, risk: 'low',
+          properties: getOntologyProperties(res.type || 'org')
+        });
+        
+        newEdges.push({ 
+          source: node.id, 
+          target: id, 
+          label: res.role || 'Kytkös löydetty', 
+          date: new Date().toISOString().split('T')[0] 
+        });
+      });
+      
+      setNodes(prev => [...prev, ...newNodes]);
+      setEdges(prev => [...prev, ...newEdges]);
+    } catch(e) { 
+      console.error("Kytkösten haku epäonnistui:", e);
+      alert("Kytkösten haku epäonnistui. Palvelin on todennäköisesti ruuhkautunut (429), yritä kohta uudelleen."); 
+    }
+    finally { setIsLoading(false); }
+  };
 
   const selectedNode = nodes.find(n => n.id === selectedNodeId);
-  const filteredNodes = nodes.filter(n => 
-    n.label.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    n.type.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredNodes = nodes.filter(n => n.label.toLowerCase().includes(searchQuery.toLowerCase()));
 
   return (
-    <div className="flex h-screen w-full bg-[#0B1120] text-slate-300 font-sans overflow-hidden select-none">
+    <div className="flex h-screen w-full bg-[#0B1120] text-slate-300 font-sans overflow-hidden select-none text-[13px]">
       
-      {/* VASEMMAN PALKIN NAVIGAATIO */}
-      <div className="w-16 bg-slate-900 border-r border-slate-800 flex flex-col items-center py-4 space-y-6 z-30">
-        <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/20 mb-4 cursor-pointer">
-          <Crosshair className="text-white" size={24} />
+      {/* --- VASEMPI NAVIGAATIOPALKKI --- */}
+      <div className="w-16 bg-slate-900 border-r border-slate-800 flex flex-col items-center py-4 space-y-6 z-30 shadow-2xl">
+        <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/20">
+          <Crosshair className="text-white" size={20} />
         </div>
-        
         <div className="flex flex-col space-y-2 w-full">
-          <button onClick={() => setActiveTab('graph')} className={`w-full py-3 flex justify-center transition-colors ${activeTab === 'graph' ? 'text-indigo-400 border-r-2 border-indigo-400 bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`} title="Verkkoanalyysi"><Network size={22} /></button>
-          <button onClick={() => setActiveTab('map')} className={`w-full py-3 flex justify-center transition-colors ${activeTab === 'map' ? 'text-indigo-400 border-r-2 border-indigo-400 bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`} title="Spatiaalinen analyysi (Kartta)"><MapIcon size={22} /></button>
-          <button onClick={() => setActiveTab('timeline')} className={`w-full py-3 flex justify-center transition-colors ${activeTab === 'timeline' ? 'text-indigo-400 border-r-2 border-indigo-400 bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`} title="Aikajana"><Clock size={22} /></button>
-          <button onClick={() => setActiveTab('database')} className={`w-full py-3 flex justify-center transition-colors ${activeTab === 'database' ? 'text-indigo-400 border-r-2 border-indigo-400 bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`} title="Tietokanta"><Database size={22} /></button>
+          <button onClick={() => setActiveTab('graph')} className={`w-full py-4 flex justify-center transition-all ${activeTab === 'graph' ? 'text-indigo-400 border-r-2 border-indigo-400 bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`} title="Verkkoanalyysi"><Network size={20} /></button>
+          <button onClick={() => setActiveTab('map')} className={`w-full py-4 flex justify-center transition-all ${activeTab === 'map' ? 'text-indigo-400 border-r-2 border-indigo-400 bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`} title="Spatiaalinen analyysi"><MapIcon size={20} /></button>
+          <button onClick={() => setActiveTab('timeline')} className={`w-full py-4 flex justify-center transition-all ${activeTab === 'timeline' ? 'text-indigo-400 border-r-2 border-indigo-400 bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`} title="Aikajana"><Clock size={20} /></button>
+          <button onClick={() => setActiveTab('database')} className={`w-full py-4 flex justify-center transition-all ${activeTab === 'database' ? 'text-indigo-400 border-r-2 border-indigo-400 bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`} title="Tietokanta"><Database size={20} /></button>
         </div>
-
         <div className="mt-auto pt-6 flex flex-col space-y-2 w-full border-t border-slate-800">
-          <button onClick={() => setIsNlpModalOpen(true)} className="w-full py-3 flex justify-center text-indigo-300 hover:text-indigo-100 bg-indigo-900/20 hover:bg-indigo-900/40" title="NLP Dokumenttianalyysi"><FileText size={20} /></button>
-          <button onClick={addNewNode} className="w-full py-3 flex justify-center text-emerald-400 hover:text-emerald-300 bg-emerald-900/10 hover:bg-emerald-900/30" title="Lisää entiteetti tähän koordinaattiin"><Plus size={22} /></button>
+          <button onClick={() => setIsNlpModalOpen(true)} className="w-full py-3 flex justify-center text-indigo-300 hover:text-indigo-100 bg-indigo-900/10 transition-colors" title="NLP Dokumenttianalyysi"><FileText size={18} /></button>
+          <button onClick={addNewNode} className="w-full py-3 flex justify-center text-emerald-400 hover:text-emerald-300 bg-emerald-900/10 transition-colors" title="Lisää entiteetti"><Plus size={20} /></button>
         </div>
       </div>
 
-      {/* PÄÄALUE */}
       <div className="flex-1 flex flex-col h-full relative">
-        <div className="h-14 bg-slate-900/95 backdrop-blur border-b border-slate-800 flex items-center justify-between px-6 z-30">
+        {/* --- YLÄPALKKI --- */}
+        <div className="h-14 bg-slate-900/95 backdrop-blur border-b border-slate-800 flex items-center justify-between px-6 z-30 shadow-sm">
           <div className="flex items-center space-x-6">
-            <h1 className="text-lg font-semibold tracking-wider text-slate-100 flex items-center">
-              NEXUS <span className="text-indigo-400 ml-2 font-normal text-xs px-2 py-0.5 bg-indigo-500/10 rounded border border-indigo-500/20">GOTHAM EDITION</span>
-            </h1>
-            
-            {(activeTab === 'graph' || activeTab === 'map') && (
-              <div className="flex items-center space-x-2 border-l border-slate-700 pl-6">
-                <button onClick={handleZoomInButton} className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white" title="Lähennä"><ZoomIn size={18} /></button>
-                <button onClick={handleZoomOutButton} className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white" title="Loitonna"><ZoomOut size={18} /></button>
-                <button onClick={() => updateCamera({ x: activeTab === 'map' ? (window.innerWidth/2 - getMapX(24.94)*8000) : 0, y: activeTab === 'map' ? (window.innerHeight/2 - getMapY(60.16)*8000) : 0, zoom: activeTab === 'map' ? 8000 : 1 })} className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white ml-2 mr-2 text-xs font-medium flex items-center" title="Palauta näkymä">
-                  <Maximize size={14} className="mr-1" /> Keskitä
-                </button>
-                
-                <div className="w-px h-5 bg-slate-700 mx-2"></div>
-                <button onClick={exportSession} className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-indigo-400" title="Lataa sessio koneelle (Export)"><Download size={18} /></button>
-                <label className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-emerald-400 cursor-pointer" title="Avaa sessio tiedostosta (Import)">
-                  <Upload size={18} /><input type="file" accept=".json" className="hidden" onChange={importSession} />
-                </label>
-                <div className="w-px h-5 bg-slate-700 mx-2"></div>
-                <button onClick={clearSession} className="p-1.5 rounded hover:bg-red-900/30 text-slate-400 hover:text-red-400" title="Tyhjennä sessio (Nollaa työtila)"><Trash2 size={18} /></button>
-              </div>
-            )}
+            <h1 className="text-xs font-black tracking-[0.4em] text-slate-100 uppercase">Nexus Intelligence Pro</h1>
+            <div className="flex items-center space-x-3 border-l border-slate-700 pl-6 text-slate-400">
+                <button onClick={() => performZoom(1.5, window.innerWidth/2, window.innerHeight/2)} className="hover:text-white p-1" title="Lähennä"><ZoomIn size={16}/></button>
+                <button onClick={() => performZoom(1/1.5, window.innerWidth/2, window.innerHeight/2)} className="hover:text-white p-1" title="Loitonna"><ZoomOut size={16}/></button>
+                <div className="w-px h-4 bg-slate-800 mx-2"></div>
+                <button onClick={clearSession} className="hover:text-red-400 p-1" title="Tyhjennä sessio"><Trash2 size={16}/></button>
+                <button onClick={exportSession} className="hover:text-indigo-400 p-1" title="Lataa sessio"><Download size={16}/></button>
+                <label className="cursor-pointer hover:text-emerald-400 p-1" title="Tuo sessio"><Upload size={16}/><input type="file" className="hidden" onChange={importSession} /></label>
+            </div>
           </div>
-          
           <div className="flex items-center space-x-4">
-            <div className="relative">
-              <button onClick={() => setShowAlerts(!showAlerts)} className={`relative p-2 rounded-full transition-colors ${alerts.length > 0 ? 'bg-red-900/30 text-red-400 hover:bg-red-900/50' : 'text-slate-500 hover:bg-slate-800'}`}>
-                <Bell size={18} />
-                {alerts.length > 0 && <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse border border-slate-900"></span>}
-              </button>
-              
-              {showAlerts && (
-                <div className="absolute right-0 top-10 w-80 bg-slate-900 border border-slate-700 shadow-2xl rounded-lg overflow-hidden z-50">
-                  <div className="bg-slate-800 p-3 text-xs font-bold uppercase tracking-wider text-slate-300 border-b border-slate-700">Järjestelmähälytykset ({alerts.length})</div>
-                  <div className="max-h-64 overflow-y-auto">
-                    {alerts.length === 0 ? <div className="p-4 text-sm text-slate-500 text-center">Ei aktiivisia hälytyksiä.</div> : alerts.map(alert => (
-                        <div key={alert.id} className={`p-3 border-b border-slate-800/50 text-sm flex items-start ${alert.level === 'critical' ? 'bg-red-950/20' : 'bg-amber-950/20'}`}>
-                          <AlertTriangle size={16} className={`mr-2 flex-shrink-0 mt-0.5 ${alert.level === 'critical' ? 'text-red-400' : 'text-amber-400'}`} />
-                          <span className="text-slate-300">{alert.message}</span>
-                        </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500" size={16} />
-              <input type="text" placeholder="Suodata näkymää..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="bg-slate-950 border border-slate-700 text-sm rounded-full pl-9 pr-4 py-1.5 focus:outline-none focus:border-indigo-500 w-64" />
-            </div>
+             <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
+                <input type="text" placeholder="Suodata näkymää..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="bg-slate-950 border border-slate-700 rounded-full pl-9 pr-4 py-1.5 text-xs w-72 focus:outline-none focus:border-indigo-500 shadow-inner" />
+             </div>
+             <button onClick={() => setShowAlerts(!showAlerts)} className={`p-2 rounded-full relative transition-colors ${alerts.length > 0 ? 'bg-red-900/20 text-red-400' : 'text-slate-500 hover:bg-slate-800'}`}>
+                <Bell size={18}/>
+                {alerts.length > 0 && <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-full animate-pulse border border-slate-900"></span>}
+             </button>
           </div>
         </div>
 
-        {/* TYÖTILAT */}
+        {/* --- PÄÄKANGAS (SVG-ANALYYSI) --- */}
         <div className="flex-1 relative overflow-hidden bg-[#0a0f18]">
-          
           {(activeTab === 'graph' || activeTab === 'map') && (
             <>
-              {/* TAUSTAT */}
-              {activeTab === 'graph' ? (
-                <div className="absolute inset-0 pointer-events-none opacity-10" style={{ backgroundImage: 'linear-gradient(rgba(255, 255, 255, 0.2) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.2) 1px, transparent 1px)', backgroundSize: `${40 * camera.zoom}px ${40 * camera.zoom}px`, backgroundPosition: `${camera.x}px ${camera.y}px` }}></div>
-              ) : (
-                <div className="absolute inset-0 pointer-events-none flex items-center justify-center overflow-hidden">
-                  {mapBackground && !showRealMap ? (
-                    <img src={mapBackground} alt="Custom" className="absolute inset-0 w-full h-full object-cover opacity-50 pointer-events-none" />
-                  ) : !showRealMap ? (
-                    <div className="absolute inset-0 opacity-20 bg-emerald-950/10" style={{ backgroundImage: 'radial-gradient(circle at center, transparent 0, transparent 20px, #10b981 21px, transparent 22px)', backgroundSize: '200px 200px', backgroundPosition: 'center' }}></div>
-                  ) : null}
-                  {!showRealMap && <div className="absolute top-4 left-4 text-emerald-500/50 font-mono text-xs tracking-widest pointer-events-none">GEOSPATIAL PROJECTION // LAT/LNG MAPPING</div>}
-                  {!showRealMap && <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'linear-gradient(rgba(16, 185, 129, 0.5) 1px, transparent 1px), linear-gradient(90deg, rgba(16, 185, 129, 0.5) 1px, transparent 1px)', backgroundSize: '100px 100px', backgroundPosition: `${camera.x}px ${camera.y}px` }}></div>}
-                </div>
-              )}
-
-              {/* KARTTATILAN KONTROLLIT */}
+              {/* Karttatilan spesifit kontrollit */}
               {activeTab === 'map' && (
-                <div className="absolute bottom-6 left-6 z-20 flex flex-col items-start pointer-events-auto space-y-3">
-                  <button onClick={(e) => { e.stopPropagation(); setShowRealMap(!showRealMap); }} className={`flex items-center space-x-2 px-4 py-2.5 rounded-lg cursor-pointer border shadow-xl transition-colors backdrop-blur ${showRealMap ? 'bg-indigo-600/90 border-indigo-500 text-white shadow-indigo-500/20' : 'bg-slate-800/90 border-slate-700 text-slate-300 hover:bg-slate-700'}`}>
-                     <MapIcon size={16} className={showRealMap ? "text-white" : "text-emerald-400"} />
-                     <span className="text-xs font-bold tracking-wide">OIKEA KARTTA {showRealMap ? 'PÄÄLLÄ' : 'POIS'}</span>
-                  </button>
-
-                  <label className="flex items-center space-x-2 bg-slate-800/90 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg cursor-pointer border border-slate-700 shadow-xl transition-colors backdrop-blur">
-                    <ImageIcon size={16} className="text-emerald-400" />
-                    <span className="text-xs font-medium">Lataa oma karttakuva</span>
-                    <input type="file" accept="image/*" className="hidden" onChange={handleMapBgUpload} />
-                  </label>
-                  {mapBackground && (
-                    <button onClick={(e) => { e.stopPropagation(); setMapBackground(null); }} className="mt-2 text-xs text-red-400 hover:text-red-300 flex items-center bg-slate-900/80 px-2 py-1 rounded">
-                      <Trash2 size={12} className="mr-1" /> Poista kuva
+                 <div className="absolute bottom-6 left-6 z-20 flex flex-col space-y-2">
+                    <button onClick={() => setShowRealMap(!showRealMap)} className={`px-4 py-2.5 rounded-lg text-[10px] font-black tracking-widest border transition-all shadow-xl backdrop-blur-md ${showRealMap ? 'bg-indigo-600 text-white border-indigo-400 shadow-[0_0_20px_rgba(79,70,229,0.3)]' : 'bg-slate-800/90 text-slate-300 border-slate-700'}`}>
+                      KARTTAKUVAT: {showRealMap ? 'PÄÄLLÄ' : 'POIS'}
                     </button>
-                  )}
-                </div>
+                    <label className="px-4 py-2 bg-slate-800/90 border border-slate-700 rounded-lg text-[10px] font-bold cursor-pointer hover:bg-slate-700 shadow-lg backdrop-blur-md transition-colors"><ImageIcon size={14} className="inline mr-2" /> LATAA OMA TAUSTA<input type="file" className="hidden" onChange={(e) => {const f=e.target.files[0]; if(f){const r=new FileReader(); r.onload=(ev)=>setMapBackground(ev.target.result); r.readAsDataURL(f);}}} /></label>
+                 </div>
               )}
               
-              {/* Oikean kartan attribuutio */}
-              {activeTab === 'map' && showRealMap && (
-                <div className="absolute bottom-2 right-[330px] z-20 text-[10px] text-slate-500 pointer-events-none">
-                  © OpenStreetMap contributors
-                </div>
-              )}
-
               <svg 
-                ref={svgRef}
-                className={`absolute inset-0 w-full h-full ${isPanning ? 'cursor-grabbing' : 'cursor-grab'}`}
-                onWheel={handleWheel} onMouseDown={handleMouseDownCanvas} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onClick={handleBackgroundClick}
+                ref={svgRef} className="w-full h-full cursor-grab active:cursor-grabbing"
+                onWheel={handleWheel} onMouseDown={handleMouseDownCanvas} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onClick={handleBackgroundClick}
               >
+                {/* Taustaruudukko (Tutka) */}
+                {activeTab === 'map' && !showRealMap && (
+                   <rect width="100%" height="100%" fill="url(#radarGrid)" />
+                )}
+                <defs>
+                   <pattern id="radarGrid" width="100" height="100" patternUnits="userSpaceOnUse" patternTransform={`translate(${camera.x % 100}, ${camera.y % 100})`}>
+                      <path d="M 100 0 L 0 0 0 100" fill="none" stroke="#10b981" strokeWidth="0.5" opacity="0.1"/>
+                   </pattern>
+                </defs>
+
                 <g transform={`translate(${camera.x}, ${camera.y}) scale(${camera.zoom})`}>
                   
-                  {/* OIKEAT KARTTATIILET (Suodatettu dark modeksi) */}
+                  {/* OPENSTREETMAP TILET */}
                   {activeTab === 'map' && showRealMap && (
-                    <g className="filter invert hue-rotate-180 brightness-75 contrast-125 opacity-70">
+                    <g className="filter invert hue-rotate-180 brightness-75 contrast-125 opacity-60">
                       {getVisibleTiles().map(t => {
-                        const tileSizeWorld = 256 / Math.pow(2, t.z);
-                        // + 1/camera.zoom lisää tarkalleen 1 näytön pikselin päällekkäisyyttä tiilille, jotta saumat piiloutuvat!
-                        const visualOverlap = 1 / camera.zoom; 
-                        return (
-                          <image
-                            key={`${t.z}-${t.x}-${t.y}`}
-                            href={`https://tile.openstreetmap.org/${t.z}/${t.x}/${t.y}.png`}
-                            x={t.x * tileSizeWorld}
-                            y={t.y * tileSizeWorld}
-                            width={tileSizeWorld + visualOverlap}
-                            height={tileSizeWorld + visualOverlap}
-                            preserveAspectRatio="none"
-                          />
-                        );
+                        const size = 256/Math.pow(2,t.z);
+                        const visualOverlap = 0.5 / camera.zoom; 
+                        return <image key={`${t.z}-${t.x}-${t.y}`} href={`https://tile.openstreetmap.org/${t.z}/${t.x}/${t.y}.png`} x={t.x*size} y={t.y*size} width={size+visualOverlap} height={size+visualOverlap} preserveAspectRatio="none" />;
                       })}
                     </g>
                   )}
 
+                  {/* CUSTOM TAUSTAKUVA */}
+                  {activeTab === 'map' && mapBackground && !showRealMap && (
+                    <image href={mapBackground} x="0" y="0" width="256" height="256" opacity="0.4" />
+                  )}
+
+                  {/* GRAAFIELEMENTIT */}
                   {(() => {
-                    const inverseZoom = camera.zoom > 1 ? 1 / camera.zoom : 1;
+                    const inv = camera.zoom > 1 ? 1/camera.zoom : 1;
                     return (
                       <>
-                        {/* Edges */}
+                        {/* Viivat (Yhteydet) - TEKSTIT AINA NÄKYVISSÄ */}
                         {edges.map((edge, i) => {
-                          const sourceNode = nodes.find(n => n.id === edge.source);
-                          const targetNode = nodes.find(n => n.id === edge.target);
-                          if (!sourceNode || !targetNode) return null;
-                          
-                          // HUOM: Aito maantieteellinen projektio!
-                          const sX = activeTab === 'map' ? getMapX(sourceNode.lng) : sourceNode.x;
-                          const sY = activeTab === 'map' ? getMapY(sourceNode.lat) : sourceNode.y;
-                          const tX = activeTab === 'map' ? getMapX(targetNode.lng) : targetNode.x;
-                          const tY = activeTab === 'map' ? getMapY(targetNode.lat) : targetNode.y;
-
-                          const isSelected = selectedNodeId === sourceNode.id || selectedNodeId === targetNode.id;
-                          const midX = (sX + tX) / 2; 
-                          const midY = (sY + tY) / 2;
-
+                          const s = nodes.find(n => n.id === edge.source);
+                          const t = nodes.find(n => n.id === edge.target);
+                          if (!s || !t) return null;
+                          const sx = activeTab === 'map' ? getMapX(s.lng) : s.x;
+                          const sy = activeTab === 'map' ? getMapY(s.lat) : s.y;
+                          const tx = activeTab === 'map' ? getMapX(t.lng) : t.x;
+                          const ty = activeTab === 'map' ? getMapY(t.lat) : t.y;
+                          const isSel = selectedNodeId === s.id || selectedNodeId === t.id;
                           return (
-                            <g key={`edge-${i}`}>
-                              <line 
-                                x1={sX} y1={sY} x2={tX} y2={tY} 
-                                className={`transition-colors duration-300 ${activeTab === 'map' ? 'stroke-emerald-900' : 'stroke-slate-700/80'} ${isSelected ? (activeTab === 'map' ? 'stroke-emerald-400' : 'stroke-indigo-400') : ''}`}
-                                strokeWidth={isSelected ? 3 / camera.zoom : 1.5 / camera.zoom}
-                              />
-                              <g transform={`translate(${midX}, ${midY}) scale(${inverseZoom})`}>
-                                <rect x="-10" y="-10" width="20" height="20" fill="#0B1120" rx="4" className={`transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0'}`}/>
-                                <text x="0" y="4" textAnchor="middle" className={`text-[10px] select-none pointer-events-none transition-opacity duration-300 ${isSelected ? 'fill-indigo-300 opacity-100' : 'fill-slate-500 opacity-0'}`}>{edge.label}</text>
-                              </g>
+                            <g key={i}>
+                                <line x1={sx} y1={sy} x2={tx} y2={ty} stroke={isSel ? '#818cf8' : '#334155'} strokeWidth={(isSel ? 3 : 1.5)/camera.zoom} opacity={isSel ? "1" : "0.5"} />
+                                {/* Kytkös-tekstit */}
+                                <g transform={`translate(${(sx+tx)/2}, ${(sy+ty)/2}) scale(${inv})`}>
+                                  <text 
+                                    x="0" 
+                                    y="0" 
+                                    textAnchor="middle" 
+                                    className={`${isSel ? 'fill-indigo-300 font-bold text-[10px]' : 'fill-slate-500 font-medium text-[8px]'} tracking-tight drop-shadow-md`}
+                                    style={{ textShadow: '0px 2px 4px rgba(0,0,0,0.8)' }}
+                                  >
+                                    {edge.label}
+                                  </text>
+                                </g>
                             </g>
                           );
                         })}
 
-                        {/* Nodes */}
-                        {nodes.map((node) => {
-                          const isSelected = selectedNodeId === node.id;
-                          if (searchQuery && !node.label.toLowerCase().includes(searchQuery.toLowerCase()) && !node.type.toLowerCase().includes(searchQuery.toLowerCase())) return null;
-
-                          const posX = activeTab === 'map' ? getMapX(node.lng) : node.x;
-                          const posY = activeTab === 'map' ? getMapY(node.lat) : node.y;
-
+                        {/* Solmut (Entiteetit) */}
+                        {nodes.map(n => {
+                          const px = activeTab === 'map' ? getMapX(n.lng) : n.x;
+                          const py = activeTab === 'map' ? getMapY(n.lat) : n.y;
+                          const isS = selectedNodeId === n.id;
+                          if (searchQuery && !n.label.toLowerCase().includes(searchQuery.toLowerCase())) return null;
+                          
                           return (
-                            <g 
-                              key={node.id}
-                              transform={`translate(${posX}, ${posY}) scale(${inverseZoom})`}
-                              onMouseDown={(e) => handleMouseDownNode(e, node.id)} onClick={(e) => handleNodeClick(e, node.id)}
-                              className="cursor-pointer"
-                            >
-                              {isSelected && (
-                                <circle r="32" className={`fill-transparent stroke-2 stroke-dasharray-[4,4] ${activeTab === 'map' ? 'stroke-emerald-400' : 'stroke-indigo-400'}`}>
-                                  <animate attributeName="stroke-dashoffset" values="0;8" dur="1s" repeatCount="indefinite" />
-                                </circle>
-                              )}
-                              <circle r="22" className={`${getNodeColor(node.type)} stroke-[3px] shadow-2xl transition-colors hover:brightness-125`} />
-                              <text y="5" textAnchor="middle" className="fill-slate-900 font-bold text-lg pointer-events-none">
-                                {node.type === 'person' ? 'P' : node.type === 'org' ? 'C' : node.type === 'location' ? 'L' : '?'}
-                              </text>
-                              <rect x="-40" y="32" width="80" height="20" rx="4" fill="#0f172a" fillOpacity="0.8" className="stroke-slate-700" strokeWidth="1" />
-                              <text y="45" textAnchor="middle" className={`text-[11px] font-medium pointer-events-none drop-shadow-md ${isSelected ? 'fill-white' : 'fill-slate-300'}`}>
-                                {node.label.length > 12 ? node.label.substring(0, 10) + '...' : node.label}
-                              </text>
-                              
-                              {activeTab === 'map' && isSelected && (
-                                <text y="60" textAnchor="middle" className="text-[9px] fill-emerald-400 font-mono pointer-events-none drop-shadow-md bg-black">
-                                  {Number(node.lat).toFixed(4)}, {Number(node.lng).toFixed(4)}
-                                </text>
-                              )}
+                            <g key={n.id} transform={`translate(${px}, ${py}) scale(${inv})`} onMouseDown={(e) => handleMouseDownNode(e, n.id)} onClick={(e) => handleNodeClick(e, n.id)} className="cursor-pointer group">
+                              {isS && <circle r="36" className="fill-transparent stroke-2 stroke-indigo-400 stroke-dasharray-[4,4] animate-pulse" />}
+                              <circle r="22" className={`${getNodeColor(n.type)} stroke-[3px] shadow-2xl transition-all group-hover:brightness-125`} />
+                              <text y="6" textAnchor="middle" className="fill-white font-black text-sm pointer-events-none uppercase">{n.type[0]}</text>
+                              <rect x="-50" y="32" width="100" height="18" rx="4" fill="#0f172a" opacity="0.85" className="stroke-slate-700" strokeWidth="0.5" />
+                              <text y="44" textAnchor="middle" className={`text-[10px] font-black tracking-tight pointer-events-none ${isS ? 'fill-white underline' : 'fill-slate-300'}`}>{n.label}</text>
                             </g>
                           );
                         })}
@@ -618,207 +637,172 @@ export default function App() {
             </>
           )}
 
-          {/* AIKAJANA JA TIETOKANTA... */}
-          {activeTab === 'timeline' && (
-            <div className="absolute inset-0 p-8 overflow-auto z-10 bg-[#0B1120]">
-              <h2 className="text-xl font-semibold mb-8 text-white flex items-center border-b border-slate-800 pb-4">
-                <Clock className="mr-3 text-indigo-400" /> Tapahtumien aikajana
-              </h2>
-              
-              <div className="relative border-l-2 border-indigo-900 ml-6 space-y-8 pb-12">
-                {[...nodes].sort((a, b) => new Date(a.date || '2000-01-01') - new Date(b.date || '2000-01-01')).map((node, i) => (
-                  <div key={i} className="relative pl-8">
-                    <div className={`absolute -left-2.5 top-1.5 w-5 h-5 rounded-full border-4 border-[#0B1120] ${getNodeColor(node.type).split(' ')[0]}`}></div>
-                    <div className="bg-slate-900/50 border border-slate-800 rounded-lg p-4 max-w-2xl hover:border-indigo-500/50 transition-colors cursor-pointer" onClick={() => { setSelectedNodeId(node.id); setActiveTab('graph'); }}>
-                      <div className="flex justify-between items-start mb-2">
-                        <span className="text-xs font-mono text-indigo-400 bg-indigo-900/20 px-2 py-1 rounded">{node.date || 'Tuntematon'}</span>
-                        <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold ${getRiskColor(node.risk)}`}>{node.risk}</span>
-                      </div>
-                      <h3 className="text-lg font-bold text-white flex items-center mb-1">
-                        <span className="mr-2 opacity-70">{getNodeIcon(node.type)}</span> {node.label}
-                      </h3>
-                      <p className="text-sm text-slate-400">{node.info}</p>
+          {/* --- OIKEA SIVUPALKKI (TIEDUSTELU JA HAUT) --- */}
+          {(activeTab === 'graph' || activeTab === 'map') && selectedNode && (
+            <div className="absolute right-0 top-0 bottom-0 w-85 bg-slate-900 border-l border-slate-800 z-40 overflow-y-auto shadow-2xl animate-in slide-in-from-right duration-300">
+                <div className="p-6 border-b border-slate-800 sticky top-0 bg-slate-900/90 backdrop-blur-md z-10">
+                    <div className="flex justify-between mb-4 items-center">
+                        <div className="text-[10px] uppercase font-black text-indigo-400 tracking-[0.2em] bg-indigo-500/10 px-2 py-0.5 rounded flex items-center">
+                            <Database size={10} className="mr-1"/> 
+                            <select 
+                                value={selectedNode.type} 
+                                onChange={(e) => setNodes(nodes.map(n => n.id === selectedNode.id ? { ...n, type: e.target.value, properties: getOntologyProperties(e.target.value) } : n))}
+                                className="bg-transparent focus:outline-none cursor-pointer appearance-none text-indigo-400"
+                            >
+                                <option value="person" className="bg-slate-900">PERSON</option>
+                                <option value="org" className="bg-slate-900">ORG</option>
+                                <option value="location" className="bg-slate-900">LOCATION</option>
+                                <option value="event" className="bg-slate-900">EVENT</option>
+                            </select>
+                        </div>
+                        <button onClick={() => deleteNode(selectedNodeId)} className="text-slate-500 hover:text-red-400 transition-colors p-1"><Trash2 size={16}/></button>
                     </div>
-                  </div>
-                ))}
-              </div>
+                    <input type="text" value={selectedNode.label} onChange={(e) => setNodes(nodes.map(n => n.id === selectedNode.id ? {...n, label: e.target.value} : n))} className="bg-transparent text-2xl font-bold w-full text-white focus:outline-none border-b border-transparent focus:border-indigo-500 transition-all pb-1" />
+                </div>
+                <div className="p-6 space-y-8 pb-24">
+                    <div>
+                        <h4 className="text-[10px] uppercase font-black text-slate-500 mb-3 tracking-widest flex items-center"><FileText size={12} className="mr-2"/> Tiedusteluraportti</h4>
+                        <textarea value={selectedNode.info} onChange={(e) => setNodes(nodes.map(n => n.id === selectedNode.id ? {...n, info: e.target.value} : n))} className="bg-slate-950 border border-slate-800 w-full p-4 text-xs rounded-xl h-56 focus:outline-none focus:border-indigo-500 transition-all text-slate-300 leading-relaxed resize-none shadow-inner" />
+                    </div>
+                    
+                    {/* HAKUPAINIKKEET JA LISÄHAKUSANAT */}
+                    <div className="grid grid-cols-1 gap-2">
+                        <input 
+                            type="text" 
+                            placeholder="➕ Omat lisähakusanat (esim. 'konkurssi', 'Venäjä')..." 
+                            value={customKeywords} 
+                            onChange={(e) => setCustomKeywords(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-800 px-3 py-2.5 rounded-xl text-xs focus:border-indigo-500 outline-none text-slate-300 shadow-inner mb-2"
+                        />
+                        <button onClick={() => transformAIOsint(selectedNode)} className="py-3.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-[10px] font-black tracking-widest flex items-center justify-center transition-all shadow-lg active:scale-95"><Sparkles size={14} className="mr-2"/> AI OSINT -TIEDUSTELU</button>
+                        <button onClick={() => transformWikipedia(selectedNode)} className="py-3.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-[10px] font-black tracking-widest flex items-center justify-center transition-all active:scale-95"><Globe size={14} className="mr-2"/> WIKIPEDIA-PROFIILI</button>
+                        <button onClick={() => transformFindConnections(selectedNode)} className="py-3.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-[10px] font-black tracking-widest flex items-center justify-center transition-all active:scale-95"><Building size={14} className="mr-2"/> ETSITÄÄN KYTKÖKSET</button>
+                    </div>
+
+                    <div className="pt-6 border-t border-slate-800">
+                        <h4 className="text-[10px] uppercase font-black text-slate-500 mb-5 tracking-widest flex items-center"><ChevronRight size={14} className="text-indigo-500 mr-1"/> Rakenteinen Data</h4>
+                        <div className="space-y-5">
+                            {Object.entries(selectedNode.properties || {}).map(([key, val]) => (
+                                <div key={key}>
+                                    <label className="text-[9px] uppercase font-bold text-slate-600 block mb-1.5 tracking-wider">{key}</label>
+                                    <input type="text" value={val} onChange={(e) => {const np = {...selectedNode.properties, [key]: e.target.value}; setNodes(nodes.map(n => n.id === selectedNode.id ? {...n, properties: np} : n));}} className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-lg text-xs focus:border-indigo-500 outline-none text-slate-300 shadow-inner" />
+                                </div>
+                            ))}
+                            <div className="grid grid-cols-2 gap-4 pt-2">
+                                <div>
+                                    <label className="text-[9px] uppercase font-bold text-slate-600 block mb-1.5">Lat</label>
+                                    <input type="number" step="0.0001" value={selectedNode.lat} onChange={(e) => setNodes(nodes.map(n => n.id === selectedNode.id ? {...n, lat: parseFloat(e.target.value)} : n))} className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-lg text-[10px] font-mono" />
+                                </div>
+                                <div>
+                                    <label className="text-[9px] uppercase font-bold text-slate-600 block mb-1.5">Lng</label>
+                                    <input type="number" step="0.0001" value={selectedNode.lng} onChange={(e) => setNodes(nodes.map(n => n.id === selectedNode.id ? {...n, lng: parseFloat(e.target.value)} : n))} className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded-lg text-[10px] font-mono" />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
+          )}
+
+          {/* --- AIKAJANA JA TIETOKANTA (MUUT VÄLILEHDET) --- */}
+          {activeTab === 'timeline' && (
+             <div className="p-10 overflow-y-auto h-full space-y-10 bg-[#0B1120] animate-in fade-in duration-500">
+                <h2 className="text-2xl font-black tracking-widest uppercase flex items-center text-white"><Clock className="mr-4 text-indigo-400" size={28}/> Tapahtuma-aikajana</h2>
+                <div className="space-y-8 max-w-4xl relative">
+                <div className="absolute left-[9px] top-4 bottom-4 w-0.5 bg-slate-800"></div>
+                {nodes.sort((a,b) => new Date(a.date)-new Date(b.date)).map(n => (
+                    <div key={n.id} className="flex space-x-8 relative group">
+                        <div className="w-5 h-5 rounded-full bg-slate-900 border-4 border-indigo-500 z-10 mt-1 shadow-[0_0_15px_rgba(99,102,241,0.5)] group-hover:scale-125 transition-transform duration-300"></div>
+                        <div className="bg-slate-900/40 p-6 rounded-3xl border border-slate-800/50 flex-1 hover:border-indigo-500/40 transition-all cursor-pointer shadow-xl backdrop-blur-sm" onClick={() => {setSelectedNodeId(n.id); setActiveTab('graph');}}>
+                            <div className="flex justify-between items-start mb-2">
+                                <span className="text-[10px] font-mono font-black text-indigo-400 bg-indigo-900/30 px-3 py-1 rounded-full uppercase tracking-tighter">{n.date}</span>
+                                <span className={`text-[9px] font-black uppercase tracking-tighter ${getRiskColor(n.risk)}`}>{n.risk} RISK</span>
+                            </div>
+                            <h3 className="font-bold text-xl text-slate-100 mt-2">{n.label}</h3>
+                            <p className="text-xs text-slate-500 mt-3 leading-relaxed line-clamp-3">{n.info}</p>
+                        </div>
+                    </div>
+                ))}
+                </div>
+             </div>
           )}
 
           {activeTab === 'database' && (
-            <div className="absolute inset-0 p-8 overflow-auto z-10 bg-[#0B1120]">
-              <h2 className="text-xl font-semibold mb-6 text-white flex items-center">
-                <Database className="mr-3 text-indigo-400" /> Raakadata ({nodes.length} tietuetta)
-              </h2>
-              <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-800/80 text-slate-400 text-xs uppercase tracking-wider">
-                      <th className="p-4 border-b border-slate-700">Tyyppi</th>
-                      <th className="p-4 border-b border-slate-700">Nimi</th>
-                      <th className="p-4 border-b border-slate-700">Riskiluokitus</th>
-                      <th className="p-4 border-b border-slate-700">Aikaleima</th>
-                      <th className="p-4 border-b border-slate-700">Toiminnot</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-sm">
-                    {filteredNodes.map(node => (
-                      <tr key={node.id} className="border-b border-slate-800/50 hover:bg-slate-800/50 transition-colors">
-                        <td className="p-4"><span className="flex items-center text-slate-400 w-max"><span className="mr-2">{getNodeIcon(node.type)}</span>{node.type}</span></td>
-                        <td className="p-4 font-medium text-slate-200">{node.label}</td>
-                        <td className="p-4"><span className={`${getRiskColor(node.risk)} uppercase text-xs font-bold`}>{node.risk}</span></td>
-                        <td className="p-4 font-mono text-xs text-slate-500">{node.date || '-'}</td>
-                        <td className="p-4 flex space-x-3">
-                          <button className="text-indigo-400 hover:text-indigo-300" onClick={() => { setSelectedNodeId(node.id); setActiveTab('graph'); }}><Maximize size={16} /></button>
-                          <button className="text-red-400 hover:text-red-300" onClick={() => deleteNode(node.id)}><Trash2 size={16} /></button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+             <div className="p-10 h-full overflow-auto bg-[#0B1120] animate-in fade-in duration-500">
+                <h2 className="text-2xl font-black tracking-widest uppercase mb-10 flex items-center text-white"><Database className="mr-4 text-indigo-400" size={28}/> Rakenteinen Tietokanta</h2>
+                <div className="bg-slate-900/40 rounded-[2rem] border border-slate-800 overflow-hidden shadow-2xl backdrop-blur-xl max-w-6xl">
+                    <table className="w-full text-left text-xs border-collapse">
+                        <thead className="text-slate-500 uppercase font-black tracking-[0.2em] bg-slate-900/80">
+                            <tr className="border-b border-slate-800">
+                                <th className="py-5 px-8">Kategoria</th>
+                                <th className="px-8">Kohde</th>
+                                <th className="px-8 text-center">Riskiarvio</th>
+                                <th className="px-8 font-mono">Geokoordinaatit</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/50">
+                            {nodes.map(n => (
+                                <tr key={n.id} className="hover:bg-indigo-500/5 transition-colors cursor-pointer group" onClick={() => {setSelectedNodeId(n.id); setActiveTab('graph');}}>
+                                    <td className="py-5 px-8 uppercase font-bold text-slate-500 flex items-center"><span className="p-2 bg-slate-800 rounded-lg mr-3 group-hover:text-indigo-400 transition-colors">{getNodeIcon(n.type)}</span>{n.type}</td>
+                                    <td className="px-8 font-black text-slate-200 text-sm tracking-tight">{n.label}</td>
+                                    <td className="px-8 text-center"><span className={`uppercase font-black px-3 py-1 rounded-lg text-[9px] bg-slate-950 border border-slate-800 ${getRiskColor(n.risk)}`}>{n.risk}</span></td>
+                                    <td className="px-8 font-mono text-slate-500 tracking-tighter">{n.lat.toFixed(5)}, {n.lng.toFixed(5)}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+             </div>
           )}
 
-          {/* OIKEA SIVUPALKKI */}
-          {(activeTab === 'graph' || activeTab === 'map') && selectedNode && (
-            <div className="absolute right-0 top-0 bottom-0 w-80 bg-slate-900/95 backdrop-blur-xl border-l border-slate-800 shadow-2xl z-30 flex flex-col transform transition-transform duration-300">
-              <div className="p-5 border-b border-slate-800 bg-slate-900">
-                <div className="flex justify-between items-start mb-2">
-                  <div className="flex items-center space-x-2">
-                    <span className="text-slate-500 bg-slate-800 p-1.5 rounded">{getNodeIcon(selectedNode.type)}</span>
-                    <select 
-                      value={selectedNode.type} 
-                      onChange={(e) => setNodes(nodes.map(n => n.id === selectedNode.id ? { ...n, type: e.target.value, properties: getOntologyProperties(e.target.value) } : n))}
-                      className="bg-transparent text-xs uppercase tracking-wider text-slate-400 font-semibold focus:outline-none cursor-pointer"
-                    >
-                      <option value="person">Henkilö</option>
-                      <option value="org">Organisaatio</option>
-                      <option value="location">Sijainti</option>
-                      <option value="event">Tapahtuma</option>
-                    </select>
-                  </div>
-                  <button onClick={() => setSelectedNodeId(null)} className="text-slate-500 hover:text-white">&times;</button>
-                </div>
-                <input 
-                  type="text" value={selectedNode.label}
-                  onChange={(e) => setNodes(nodes.map(n => n.id === selectedNode.id ? { ...n, label: e.target.value } : n))}
-                  className="w-full bg-transparent text-xl font-bold text-white focus:outline-none focus:border-b focus:border-indigo-500 border-b border-transparent pb-1"
-                />
-              </div>
-              
-              <div className="flex-1 overflow-y-auto">
-                <div className="p-5 border-b border-slate-800/50">
-                  <h4 className="text-[10px] uppercase tracking-wider text-slate-500 mb-2 font-bold">Yleiset Tilitiedot</h4>
-                  <textarea 
-                    value={selectedNode.info}
-                    onChange={(e) => setNodes(nodes.map(n => n.id === selectedNode.id ? { ...n, info: e.target.value } : n))}
-                    className="w-full text-sm text-slate-300 leading-relaxed bg-slate-950 p-3 rounded-lg border border-slate-800 focus:border-indigo-500 focus:outline-none min-h-[60px] resize-y mb-3"
-                  />
-                  
-                  <div className="flex flex-col space-y-2 mb-4">
-                    {selectedNode.wikiUrl && (
-                      <a href={selectedNode.wikiUrl} target="_blank" rel="noreferrer" className="text-[10px] text-indigo-400 hover:text-indigo-300 inline-flex items-center">
-                        <Globe size={10} className="mr-1" /> Avaa Wikipedia-artikkeli
-                      </a>
-                    )}
-                    <a href={`https://www.google.com/search?q=${encodeURIComponent(selectedNode.label)}`} target="_blank" rel="noreferrer" className="text-[10px] text-indigo-400 hover:text-indigo-300 inline-flex items-center">
-                      <ExternalLink size={10} className="mr-1" /> Hae Googlesta (Uusi välilehti)
-                    </a>
-                  </div>
-                  
-                  <div className="flex space-x-2">
-                    <div className="flex-1">
-                      <label className="text-[10px] uppercase text-slate-500 block mb-1">Aikaleima</label>
-                      <input type="date" value={selectedNode.date || ''} onChange={(e) => setNodes(nodes.map(n => n.id === selectedNode.id ? { ...n, date: e.target.value } : n))} className="w-full bg-slate-950 text-slate-300 text-xs p-2 rounded border border-slate-800" />
-                    </div>
-                    <div className="flex-1">
-                      <label className="text-[10px] uppercase text-slate-500 block mb-1">Riski</label>
-                      <select value={selectedNode.risk} onChange={(e) => setNodes(nodes.map(n => n.id === selectedNode.id ? { ...n, risk: e.target.value } : n))} className={`w-full bg-slate-950 text-xs p-2 rounded border border-slate-800 ${getRiskColor(selectedNode.risk)}`}>
-                        <option value="low" className="text-emerald-400">Matala</option><option value="medium" className="text-amber-400">Kohtalainen</option><option value="high" className="text-red-400">Korkea</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-5 border-b border-slate-800/50 bg-slate-900/50">
-                  <h4 className="text-[10px] uppercase tracking-wider text-indigo-400 mb-3 font-bold flex items-center"><Database size={12} className="mr-1"/> Ontologia-ominaisuudet</h4>
-                  <div className="space-y-3">
-                    {selectedNode.properties && Object.keys(selectedNode.properties).map(key => (
-                      <div key={key}>
-                        <label className="text-[10px] uppercase text-slate-500 block mb-1">{key}</label>
-                        <input 
-                          type="text" value={selectedNode.properties[key] || ''} 
-                          onChange={(e) => updateNodeProperty(selectedNode.id, key, e.target.value)}
-                          className="w-full bg-slate-950 text-slate-300 text-xs p-2 rounded border border-slate-800 focus:border-indigo-500 focus:outline-none"
-                        />
-                      </div>
-                    ))}
-                    
-                    <div className="flex space-x-2 pt-2 border-t border-slate-800 mt-2">
-                      <div className="flex-1">
-                        <label className="text-[10px] uppercase text-slate-500 block mb-1">Lat</label>
-                        <input type="number" step="0.0001" value={selectedNode.lat || ''} onChange={(e) => setNodes(nodes.map(n => n.id === selectedNode.id ? { ...n, lat: parseFloat(e.target.value) } : n))} className="w-full bg-slate-950 text-slate-300 text-xs p-1.5 rounded border border-slate-800" />
-                      </div>
-                      <div className="flex-1">
-                        <label className="text-[10px] uppercase text-slate-500 block mb-1">Lng</label>
-                        <input type="number" step="0.0001" value={selectedNode.lng || ''} onChange={(e) => setNodes(nodes.map(n => n.id === selectedNode.id ? { ...n, lng: parseFloat(e.target.value) } : n))} className="w-full bg-slate-950 text-slate-300 text-xs p-1.5 rounded border border-slate-800" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-5 border-b border-slate-800/50 bg-indigo-950/10">
-                  <h4 className="text-[10px] uppercase tracking-wider text-slate-500 mb-3 font-bold">Integraatiot (Transforms)</h4>
-                  <div className="space-y-2">
-                    <button onClick={() => transformAIOsint(selectedNode)} className="w-full bg-indigo-900/40 hover:bg-indigo-900/60 border border-indigo-700/50 p-2 rounded text-xs flex items-center transition-colors">
-                      <Sparkles size={14} className="text-indigo-400 mr-2" /> AI OSINT (Google Haku)
-                    </button>
-                    <button onClick={() => transformWikipediaSearch(selectedNode)} className="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 p-2 rounded text-xs flex items-center transition-colors">
-                      <Globe size={14} className="text-blue-400 mr-2" /> Etsi OSINT-tieto (Wikipedia)
-                    </button>
-                    <button onClick={() => transformFindCompanies(selectedNode)} className="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 p-2 rounded text-xs flex items-center transition-colors">
-                      <Building size={14} className="text-purple-400 mr-2" /> Hae yhtiökytkökset (PRH)
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
+          {/* --- MODAALIT JA LATAUS-ILMOITUKSET --- */}
+          
           {isLoading && (
-            <div className="absolute inset-0 bg-slate-950/40 backdrop-blur-sm z-50 flex items-center justify-center">
-              <div className="bg-slate-900 border border-indigo-500/50 p-6 rounded-2xl shadow-2xl flex flex-col items-center">
-                <RefreshCw size={32} className="text-indigo-400 animate-spin mb-4" />
-                <span className="text-slate-100 font-bold tracking-wide">{loadingText}</span>
-                <span className="text-slate-500 text-xs mt-2">Analysoidaan verkkoa...</span>
-              </div>
+            <div className="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center text-center">
+                <div className="bg-slate-900 p-16 rounded-[3rem] border border-indigo-500/30 shadow-2xl">
+                    <RefreshCw className="animate-spin text-indigo-400 mb-8 mx-auto" size={64} />
+                    <h3 className="font-black tracking-[0.3em] text-white uppercase text-sm mb-2">{loadingText}</h3>
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">NEXUS DATA LINK ACTIVE</p>
+                </div>
             </div>
           )}
 
           {isNlpModalOpen && (
-            <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-              <div className="bg-slate-900 border border-slate-700 w-full max-w-2xl rounded-xl shadow-2xl flex flex-col overflow-hidden">
-                <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-800/50">
-                  <h3 className="text-lg font-bold text-white flex items-center"><FileText className="mr-2 text-indigo-400" size={20} /> Syötä analysoitava teksti</h3>
-                  <button onClick={() => setIsNlpModalOpen(false)} className="text-slate-500 hover:text-white"><X size={20} /></button>
+            <div className="absolute inset-0 z-[80] bg-black/90 backdrop-blur-xl flex items-center justify-center p-6 animate-in zoom-in duration-300">
+                <div className="bg-slate-900 border border-slate-700 w-full max-w-3xl rounded-[2.5rem] overflow-hidden shadow-2xl">
+                    <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-800/20">
+                        <span className="font-black uppercase text-xs tracking-[0.3em] text-indigo-400 flex items-center"><FileText size={18} className="mr-3"/> DOKUMENTTIANALYYSI (NLP)</span>
+                        <button onClick={() => setIsNlpModalOpen(false)} className="text-slate-500 hover:text-white transition-colors p-2"><X size={28}/></button>
+                    </div>
+                    <div className="p-10 text-center">
+                        <p className="text-sm text-slate-400 mb-8 leading-relaxed">Liitä tähän tiedusteluraportti, uutisartikkeli tai viranomaisasiakirja. Nexus-tekoäly poimii tekstistä automaattisesti henkilöt, organisaatiot ja sijainnit, ja rakentaa niistä verkoston suoraan kankaalle.</p>
+                        <textarea value={nlpInputText} onChange={(e) => setNlpInputText(e.target.value)} placeholder="Syötä raakateksti tähän analysoitavaksi..." className="w-full h-80 bg-slate-950 border border-slate-800 p-6 text-sm rounded-[1.5rem] focus:outline-none focus:border-indigo-500 transition-all text-slate-300 leading-relaxed resize-none shadow-inner mb-8" />
+                        <button onClick={ingestDocument} className="w-full py-5 bg-indigo-600 hover:bg-indigo-500 rounded-[1.5rem] font-black uppercase text-xs tracking-[0.3em] text-white shadow-xl transition-all active:scale-95 flex items-center justify-center">
+                            <Sparkles size={20} className="mr-3"/> ANALYSOI JA RAKENNA VERKKO
+                        </button>
+                    </div>
                 </div>
-                <div className="p-4 flex-1">
-                  <p className="text-sm text-slate-400 mb-3">Liitä tähän vapaamuotoinen teksti. NLP-moottori lukee tekstin, tunnistaa entiteetit ja piirtää ne suoraan kankaalle.</p>
-                  <textarea
-                    value={nlpInputText}
-                    onChange={(e) => setNlpInputText(e.target.value)}
-                    placeholder="Liitä teksti tähän..."
-                    className="w-full h-64 bg-slate-950 border border-slate-800 rounded-lg p-3 text-slate-300 text-sm focus:border-indigo-500 focus:outline-none resize-none"
-                  />
+            </div>
+          )}
+
+          {showAlerts && (
+            <div className="absolute top-16 right-20 w-96 bg-slate-900/95 border border-slate-700 rounded-3xl shadow-2xl z-50 overflow-hidden backdrop-blur-xl animate-in slide-in-from-top-4 duration-300">
+                <div className="p-4 border-b border-slate-800 font-black text-[10px] uppercase tracking-widest text-slate-400 bg-slate-800/40">Järjestelmähälytykset ({alerts.length})</div>
+                <div className="max-h-96 overflow-y-auto">
+                    {alerts.length === 0 ? (
+                        <div className="p-8 text-center text-slate-600 italic text-xs">Ei aktiivisia hälytyksiä.</div>
+                    ) : (
+                        alerts.map(a => (
+                            <div key={a.id} className={`p-5 border-b border-slate-800/50 flex items-start space-x-4 ${a.level === 'critical' ? 'bg-red-500/5' : 'bg-amber-500/5'}`}>
+                                <AlertTriangle className={a.level === 'critical' ? 'text-red-400' : 'text-amber-400'} size={18}/>
+                                <div>
+                                    <p className="text-xs text-slate-200 leading-relaxed font-medium">{a.message}</p>
+                                    <span className="text-[9px] uppercase font-black text-slate-600 mt-2 block tracking-widest">Priority: {a.level}</span>
+                                </div>
+                            </div>
+                        ))
+                    )}
                 </div>
-                <div className="p-4 border-t border-slate-800 bg-slate-900 flex justify-end space-x-3">
-                  <button onClick={() => setIsNlpModalOpen(false)} className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors">Peruuta</button>
-                  <button onClick={ingestDocument} disabled={!!apiKey && !nlpInputText.trim()} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-sm font-medium rounded-lg transition-colors flex items-center">
-                    <Sparkles size={16} className="mr-2" /> Analysoi ja luo verkko
-                  </button>
-                </div>
-              </div>
             </div>
           )}
 

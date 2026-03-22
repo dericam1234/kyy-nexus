@@ -1,16 +1,67 @@
-# React + Vite
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
-Currently, two official plugins are available:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+# Ympäristön pystytys (Node.js & Vite)
 
-## React Compiler
+Jos sinulla ei ole Node.js:ää asennettuna, lataa ja asenna se osoitteesta https://nodejs.org.
+Avaa terminaali (Komentokehote / Terminal).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
-## Expanding the ESLint configuration
+## Asenna projekti GitHubista
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Kloonaa tai kopioi projekti projekti:
+git clone https://github.com/kayttaja/projekti.git
+
+Siirry kansioon:
+cd projekti
+
+Asenna riippuvuudet:
+npm install
+
+
+## API-avaimien hankkiminen (TÄRKEÄÄ)
+Jotta Document Ingest, AI OSINT ja Yhtiö-kytkökset saavat oikeasti yhteyden tekoälyyn ja Googlen hakutuloksiin, tarvitset Gemini API-avaimen.
+
+1. Mene selaimella osoitteeseen: [aistudio.google.com](https://aistudio.google.com/)
+2. Kirjaudu sisään Google-tililläsi.
+3. Etsi vasemmasta reunasta tai yläpalkista painike **"Get API key"** (Hanki API-avain).
+4. Klikkaa "Create API key" (Luo uusi API-avain uudessa projektissa).
+5. Kopioi ruudulle ilmestyvä pitkä salasanarimpsu (esim. `AIzaSy...`) talteen. Tämä on täysin ilmainen käyttää kehitystyössä.
+
+### Koodin yhdistäminen
+1. Avaa tiedosto `src/App.jsx` editorissasi
+3. Etsi koodin alusta kohta:
+   `const apiKey = "";`
+4. Liitä Googlelta kopioimasi avain lainausmerkkien sisään:
+   `const apiKey = "AIzaSySinunAvainTähän...";`
+5. Tallenna tiedosto.
+
+## Käynnistys
+Aja terminaalissa komento:
+```bash
+npm run dev
+Selain avaa sivun `localhost:5173`, ja sinulla on nyt omalla koneellasi pyörivä, tekoälyllä ladattu tiedustelualusta!
+
+## Mahdolliset ongelmat
+
+### Node-versio
+
+Tarkista versio:
+
+node -v
+Jos versio on alle 20 → päivitä Node.js
+
+### npm ei toimi
+
+npm cache clean --force
+npm install
+
+### Portti varattu
+
+npm run dev -- --port=3000
+
+## Vinkit
+
+- Tarkista löytyykö `.env` tai `.env.example`
+- Jos löytyy `.env.example`, kopioi se `.env`-tiedostoksi
+- Lisää tarvittavat API-avaimet
