@@ -1,11 +1,10 @@
+# Kyy Nexus - Intelligence platform
 
 
-
-# Ympäristön pystytys (Node.js & Vite)
+## Ympäristön pystytys (Node.js & Vite)
 
 Jos sinulla ei ole Node.js:ää asennettuna, lataa ja asenna se osoitteesta https://nodejs.org.
 Avaa terminaali (Komentokehote / Terminal).
-
 
 ## Asenna projekti GitHubista
 
@@ -17,7 +16,6 @@ cd projekti
 
 Asenna riippuvuudet:
 npm install
-
 
 ## API-avaimien hankkiminen (TÄRKEÄÄ)
 Jotta Document Ingest, AI OSINT ja Yhtiö-kytkökset saavat oikeasti yhteyden tekoälyyn ja Googlen hakutuloksiin, tarvitset Gemini API-avaimen.
@@ -38,7 +36,7 @@ Jotta Document Ingest, AI OSINT ja Yhtiö-kytkökset saavat oikeasti yhteyden te
 
 ## Käynnistys
 Aja terminaalissa komento:
-```bash
+
 npm run dev
 Selain avaa sivun `localhost:5173`, ja sinulla on nyt omalla koneellasi pyörivä, tekoälyllä ladattu tiedustelualusta!
 

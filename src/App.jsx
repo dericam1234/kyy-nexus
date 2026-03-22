@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 
 /**
- * KYY NEXUS - INTELLIGENCE PLATFORM
+ * KYY NEXUS INTELLIGENCE PLATFORM - GOTHAM EDITION
  * -------------------------------------------
  * Täysimittainen tiedustelu- ja analyysialusta.
  * - Graafipohjainen verkostoanalyysi (Semantic Zoom)
@@ -71,23 +71,64 @@ const fetchWithBackoff = async (url, options, retries = 4, delay = 1500) => {
   }
 };
 
-// --- VERKKOHAKU (WEB SCRAPING) ---
+// --- VERKKOHAKU (WEB SCRAPING) VAHVISTETULLA LOGIIKALLA ---
 // Haetaan hakutulokset ensin erikseen avoimen proxyn kautta välttäen evästemuurit, minkä jälkeen AI analysoi pelkän tekstin.
 const fetchWebData = async (query) => {
   try {
-    const url = `https://api.allorigins.win/get?url=${encodeURIComponent('https://html.duckduckgo.com/html/?q=' + query)}`;
-    const response = await fetch(url);
-    const data = await response.json();
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(data.contents, 'text/html');
-    let text = Array.from(doc.querySelectorAll('.result__snippet')).map(el => el.textContent).join('\n');
-    if (!text) {
-       text = doc.body.textContent.replace(/\s+/g, ' ').substring(0, 5000);
+    // Käytetään useampaa hakukonetta varmuuden vuoksi. Yahoo on usein sallivampi proxy-hauille kuin DuckDuckGo.
+    const engines = [
+      { url: `https://search.yahoo.com/search?p=${encodeURIComponent(query)}`, selector: '.compText' },
+      { url: `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, selector: '.result__snippet' }
+    ];
+
+    let html = '';
+    let usedSelector = '';
+
+    for (const engine of engines) {
+      // Aikaleima (Date.now()) estää palvelimia palauttamasta välimuistissa olevaa vanhaa virhesivua
+      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(engine.url)}&t=${Date.now()}`;
+      try {
+        const response = await fetch(proxyUrl);
+        if (response.ok) {
+          const data = await response.json();
+          html = data.contents;
+          
+          // ROBUSTI SUODATIN: Varmistetaan ettei proxy palauttanut DDoS-suojauksen "Bot Check" -sivua
+          const isBlocked = html.includes('Bot Check') || 
+                            html.includes('d4cd0dab') || 
+                            html.includes('Cloudflare') ||
+                            html.length < 500;
+                            
+          if (!isBlocked) {
+            usedSelector = engine.selector;
+            break; // Toimiva HTML-sivu saatiin, lopetetaan yrittäminen
+          } else {
+            console.warn("Palomuuri havaittu, yritetään seuraavaa hakukonetta...");
+            html = ''; // Nollataan
+          }
+        }
+      } catch (e) {
+        console.warn(`Proxy-yhteys epäonnistui.`);
+      }
     }
+
+    if (!html) {
+       return "VERKKOHAKU EPÄONNISTUI: Kohdetta ei voitu hakea, koska hakukoneiden bottisuojaus esti pyynnöt tilapäisesti. Kokeile myöhemmin uudelleen.";
+    }
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    let text = Array.from(doc.querySelectorAll(usedSelector)).map(el => el.textContent.trim()).join('\n');
+    
+    // Jos osumia ei löytynyt, otetaan talteen body-teksti siivottuna varasuunnitelmana
+    if (!text || text.length < 50) {
+       text = doc.body?.textContent?.replace(/\s+/g, ' ').substring(0, 5000);
+    }
+    
     return text || "Ei merkittäviä hakutuloksia.";
   } catch (e) {
     console.error("Web-haun virhe:", e);
-    return "Hakutulosten nouto epäonnistui.";
+    return "Hakutulosten nouto epäonnistui proxy-virheen vuoksi.";
   }
 };
 
@@ -162,7 +203,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [alerts, setAlerts] = useState([]);
   const [showAlerts, setShowAlerts] = useState(false);
-  const [customKeywords, setCustomKeywords] = useState(''); // UUSI: Omat hakusanat
+  const [customKeywords, setCustomKeywords] = useState(''); // Omat hakusanat
   
   // Kameroiden hallinta
   const [cameras, setCameras] = useState(() => {
@@ -282,6 +323,45 @@ export default function App() {
   const handleNodeClick = (e, id) => { e.stopPropagation(); if (!isDragged) setSelectedNodeId(prev => prev === id ? null : id); };
   const handleBackgroundClick = () => { if (!isDragged && !isPanning) setSelectedNodeId(null); };
 
+  // --- NÄKYMÄN KESKITYS (FIT TO SCREEN) ---
+  const handleFitToScreen = () => {
+    if (nodes.length === 0) return;
+
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+
+    nodes.forEach(n => {
+      const nx = activeTab === 'map' ? getMapX(n.lng) : n.x;
+      const ny = activeTab === 'map' ? getMapY(n.lat) : n.y;
+      if (nx < minX) minX = nx;
+      if (nx > maxX) maxX = nx;
+      if (ny < minY) minY = ny;
+      if (ny > maxY) maxY = ny;
+    });
+
+    if (minX === maxX) { minX -= 100; maxX += 100; }
+    if (minY === maxY) { minY -= 100; maxY += 100; }
+
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+
+    const availableWidth = window.innerWidth - 300; 
+    const availableHeight = window.innerHeight - 100;
+    
+    let zoomX = availableWidth / (maxX - minX);
+    let zoomY = availableHeight / (maxY - minY);
+    let newZoom = Math.min(zoomX, zoomY) * 0.9; 
+
+    const maxZ = activeTab === 'map' ? 1000000 : 2;
+    const minZ = activeTab === 'map' ? 1000 : 0.1;
+    newZoom = Math.max(minZ, Math.min(newZoom, maxZ));
+
+    const newCamX = (window.innerWidth / 2) - (centerX * newZoom);
+    const newCamY = (window.innerHeight / 2) - (centerY * newZoom);
+
+    updateCamera({ x: newCamX, y: newCamY, zoom: newZoom });
+  };
+
   // --- ENTITEETTIEN HALLINTA ---
   const addNewNode = () => {
     const wX = (-camera.x + window.innerWidth / 2) / camera.zoom;
@@ -345,7 +425,7 @@ export default function App() {
     try {
       const prompt = `Analysoi teksti ja poimi tärkeimmät entiteetit ja niiden väliset suhteet. Palauta VASTAUS PELKKÄNÄ JSONINA ilman markdown-tageja. Käytä tätä tiukkaa rakennetta: {"nodes": [{"id": "n1", "label": "Nimi", "type": "person/org/location", "info": "Kuvaus", "lat": 61.4, "lng": 21.7, "risk": "low/medium/high"}], "edges": [{"source": "n1", "target": "n2", "label": "Tähän selkeä lyhyt suhde, esim. 'Omistaja'"}]}. Teksti: ${nlpInputText}`;
       
-      const rawText = await callGemini(prompt, true); // Ei hakua, käytetään JSON modea
+      const rawText = await callGemini(prompt, true); 
       const jsonMatch = rawText.match(/\{[\s\S]*"nodes"[\s\S]*"edges"[\s\S]*\}/);
       if (!jsonMatch) throw new Error("Ei JSON-verkkoa.");
       
@@ -390,15 +470,17 @@ export default function App() {
     setLoadingText(`Kerätään hakutietoja verkosta kohteelle: ${node.label}...`);
     setIsLoading(true);
     try {
-      // 1. Suoritetaan erillinen verkkohaku käyttäen omia lisähakusanoja jos niitä on
-      const query = `${node.label} tiedustelu uutiset ${customKeywords}`.trim();
+      const query = `"${node.label}" ${customKeywords ? customKeywords : 'uutiset OR tiedotteet'}`.trim();
       const searchResults = await fetchWebData(query);
       
-      // 2. Annetaan raakateksti tekoälyn analysoitavaksi
-      const prompt = `Tee tiivistetty tiedusteluanalyysi (max 5 lausetta) kohteesta: ${node.label} (${node.type}). Käytä analyysissä VAIN näitä hakutuloksia:\n\n${searchResults}\n\nJos hakutuloksia on vähän, tee paras arviosi.`;
+      const prompt = `Tee tiivistetty tiedusteluanalyysi (max 5 lausetta) kohteesta: ${node.label} (${node.type}). Käytä analyysissä VAIN näitä hakutuloksia:\n\n${searchResults}\n\nJos hakutuloksia on vähän, tee paras arviosi olemassa olevan tiedon pohjalta.`;
       
       const report = await callGemini(prompt, false); 
-      setNodes(prev => prev.map(n => n.id === node.id ? { ...n, info: report } : n));
+      
+      setNodes(prev => prev.map(n => n.id === node.id ? { 
+        ...n, 
+        info: n.info ? `${n.info}\n\n--- AI OSINT (${new Date().toLocaleDateString()}) ---\n${report}` : report 
+      } : n));
     } catch (e) { 
       console.error("OSINT-virhe:", e); 
       alert("OSINT-analyysi epäonnistui. Palvelin saattaa olla ruuhkautunut."); 
@@ -413,7 +495,10 @@ export default function App() {
       const res = await fetch(`https://fi.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(node.label)}`);
       if (res.ok) {
         const data = await res.json();
-        setNodes(prev => prev.map(n => n.id === node.id ? { ...n, info: data.extract } : n));
+        setNodes(prev => prev.map(n => n.id === node.id ? { 
+          ...n, 
+          info: n.info ? `${n.info}\n\n--- WIKIPEDIA ---\n${data.extract}` : data.extract 
+        } : n));
       } else { alert("Ei Wikipedia-artikkelia löytynyt."); }
     } catch (e) { alert("Yhteysvirhe Wikipediaan."); }
     finally { setIsLoading(false); }
@@ -424,36 +509,44 @@ export default function App() {
     setLoadingText(`Etsitään kytköksiä verkosta: ${node.label}...`);
     setIsLoading(true);
     try {
-      // 1. Suoritetaan erillinen verkkohaku kytköksistä omien lisähakusanojen kanssa
-      const query = `${node.label} yritys hallitus omistaja kytkökset ${customKeywords}`.trim();
+      const query = `"${node.label}" ${customKeywords ? customKeywords : 'kytkökset OR verkosto OR uutiset'}`.trim();
       const searchResults = await fetchWebData(query);
 
-      // 2. Analysoidaan teksti tekoälyllä ja palautetaan JSON
-      const prompt = `Analysoi seuraavat hakutulokset ja etsi niistä todellisia yrityksiä, organisaatioita tai ihmisiä, jotka liittyvät kohteeseen "${node.label}". 
-      Palauta VASTAUS PELKKÄNÄ JSON-LISTANA. Formatti: [{"name": "Yritys Oy", "role": "Tähän lyhyt selkeä suhde (esim. Hallituksen jäsen, Omistaja)", "type": "org" tai "person", "info": "Miksi liittyy"}]. 
-      Jos et löydä selkeitä kytköksiä, palauta tyhjä lista []. Älä kirjoita muuta tekstiä kuin puhdas JSON-taulukko.
+      const prompt = `Olet tiedusteluanalyytikko. Etsi seuraavista hakutuloksista KAIKKI henkilöt, yritykset ja organisaatiot, jotka mainitaan kohteen "${node.label}" yhteydessä. 
+      Voit myös käyttää omaa yleistietoasi täydentämään kytköksiä, jos olet niistä varma.
+      
+      Palauta VASTAUS PELKKÄNÄ JSON-LISTANA. Formatti: [{"name": "Matti Meikäläinen", "role": "Liikekumppani", "type": "person", "info": "Mainittiin samassa uutisessa"}]. 
+      Yritä löytää vähintään 1-3 kytköstä. Älä kirjoita muuta tekstiä kuin puhdas JSON-taulukko.
       
       Hakutulokset:
       ${searchResults}`;
       
       const rawText = await callGemini(prompt, false); 
       
-      const jsonMatch = rawText.match(/\[\s*\{[\s\S]*\}\s*\]/);
-      if (!jsonMatch) {
-          alert("Ei selkeitä kytköksiä löydetty nykyisillä hakutuloksilla.");
+      let cleanText = rawText.replace(/```json|```/gi, "").trim();
+      const startIndex = cleanText.indexOf('[');
+      const endIndex = cleanText.lastIndexOf(']');
+      
+      if (startIndex === -1 || endIndex === -1) {
+          alert("Tekoäly ei löytänyt tarpeeksi selkeitä kytköksiä. Kokeile antaa lisähakusanoja.");
           return;
       }
       
-      const results = JSON.parse(jsonMatch[0]);
+      cleanText = cleanText.substring(startIndex, endIndex + 1);
+      const results = JSON.parse(cleanText);
+      
+      if (results.length === 0) {
+          alert("Ei kytköksiä löydetty. Kokeile antaa lisähakusanoja.");
+          return;
+      }
       
       const newNodes = [];
       const newEdges = [];
       
       results.forEach((res, index) => {
         const id = generateId();
-        // Levitellään uudet pallot nätisti säteittäisesti
         const angle = (index / results.length) * Math.PI * 2;
-        const radius = 150 + Math.random() * 50;
+        const radius = 180 + Math.random() * 50;
         
         newNodes.push({
           id, label: res.name, type: res.type || 'org',
@@ -462,7 +555,7 @@ export default function App() {
           lat: node.lat + (Math.random()*0.02 - 0.01), 
           lng: node.lng + (Math.random()*0.02 - 0.01), 
           date: new Date().toISOString().split('T')[0],
-          info: res.info || `Löydetty OSINT-kytkös.`, risk: 'low',
+          info: res.info || `Löydetty AI-kytkös.`, risk: 'low',
           properties: getOntologyProperties(res.type || 'org')
         });
         
@@ -478,9 +571,29 @@ export default function App() {
       setEdges(prev => [...prev, ...newEdges]);
     } catch(e) { 
       console.error("Kytkösten haku epäonnistui:", e);
-      alert("Kytkösten haku epäonnistui. Palvelin on todennäköisesti ruuhkautunut (429), yritä kohta uudelleen."); 
+      alert("Kytkösten haussa tapahtui virhe. Tekoäly ei voinut muodostaa verkostoa."); 
     }
     finally { setIsLoading(false); }
+  };
+
+  const centerOnMap = (node) => {
+    if (!node) return;
+    setActiveTab('map');
+    setCameras(prev => {
+      const targetZoom = Math.max(prev.map.zoom, 50000); 
+      const w = typeof window !== 'undefined' ? window.innerWidth : 1200;
+      const h = typeof window !== 'undefined' ? window.innerHeight : 800;
+      const offsetX = (w - 340) / 2; 
+      const offsetY = h / 2;
+      return {
+        ...prev,
+        map: {
+          x: offsetX - getMapX(node.lng) * targetZoom,
+          y: offsetY - getMapY(node.lat) * targetZoom,
+          zoom: targetZoom
+        }
+      };
+    });
   };
 
   const selectedNode = nodes.find(n => n.id === selectedNodeId);
@@ -491,9 +604,13 @@ export default function App() {
       
       {/* --- VASEMPI NAVIGAATIOPALKKI --- */}
       <div className="w-16 bg-slate-900 border-r border-slate-800 flex flex-col items-center py-4 space-y-6 z-30 shadow-2xl">
-        <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/20">
+        <button 
+          onClick={handleFitToScreen}
+          className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/20 hover:bg-indigo-500 hover:scale-105 active:scale-95 transition-all"
+          title="Keskitä näkymä (Fit to Screen)"
+        >
           <Crosshair className="text-white" size={20} />
-        </div>
+        </button>
         <div className="flex flex-col space-y-2 w-full">
           <button onClick={() => setActiveTab('graph')} className={`w-full py-4 flex justify-center transition-all ${activeTab === 'graph' ? 'text-indigo-400 border-r-2 border-indigo-400 bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`} title="Verkkoanalyysi"><Network size={20} /></button>
           <button onClick={() => setActiveTab('map')} className={`w-full py-4 flex justify-center transition-all ${activeTab === 'map' ? 'text-indigo-400 border-r-2 border-indigo-400 bg-slate-800/50' : 'text-slate-500 hover:text-slate-300'}`} title="Spatiaalinen analyysi"><MapIcon size={20} /></button>
@@ -662,11 +779,12 @@ export default function App() {
                 <div className="p-6 space-y-8 pb-24">
                     <div>
                         <h4 className="text-[10px] uppercase font-black text-slate-500 mb-3 tracking-widest flex items-center"><FileText size={12} className="mr-2"/> Tiedusteluraportti</h4>
-                        <textarea value={selectedNode.info} onChange={(e) => setNodes(nodes.map(n => n.id === selectedNode.id ? {...n, info: e.target.value} : n))} className="bg-slate-950 border border-slate-800 w-full p-4 text-xs rounded-xl h-56 focus:outline-none focus:border-indigo-500 transition-all text-slate-300 leading-relaxed resize-none shadow-inner" />
+                        <textarea value={selectedNode.info} onChange={(e) => setNodes(nodes.map(n => n.id === selectedNode.id ? {...n, info: e.target.value} : n))} className="bg-slate-950 border border-slate-800 w-full p-4 text-xs rounded-xl h-56 min-h-[8rem] max-h-[40rem] focus:outline-none focus:border-indigo-500 transition-colors duration-200 text-slate-300 leading-relaxed resize-y shadow-inner" />
                     </div>
                     
                     {/* HAKUPAINIKKEET JA LISÄHAKUSANAT */}
                     <div className="grid grid-cols-1 gap-2">
+                        <button onClick={() => centerOnMap(selectedNode)} className="py-3.5 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-[10px] font-black tracking-widest flex items-center justify-center transition-all shadow-lg active:scale-95 text-white"><MapPin size={14} className="mr-2"/> KESKITÄ KARTALLA</button>
                         <input 
                             type="text" 
                             placeholder="➕ Omat lisähakusanat (esim. 'konkurssi', 'Venäjä')..." 
