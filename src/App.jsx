@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 
 /**
- * NEXUS INTELLIGENCE PLATFORM - GOTHAM EDITION
+ * KYY NEXUS - INTELLIGENCE PLATFORM
  * -------------------------------------------
  * Täysimittainen tiedustelu- ja analyysialusta.
  * - Graafipohjainen verkostoanalyysi (Semantic Zoom)
@@ -510,7 +510,7 @@ export default function App() {
         {/* --- YLÄPALKKI --- */}
         <div className="h-14 bg-slate-900/95 backdrop-blur border-b border-slate-800 flex items-center justify-between px-6 z-30 shadow-sm">
           <div className="flex items-center space-x-6">
-            <h1 className="text-xs font-black tracking-[0.4em] text-slate-100 uppercase">Nexus Intelligence Pro</h1>
+            <h1 className="text-xs font-black tracking-[0.4em] text-slate-100 uppercase">Kyy Nexus</h1>
             <div className="flex items-center space-x-3 border-l border-slate-700 pl-6 text-slate-400">
                 <button onClick={() => performZoom(1.5, window.innerWidth/2, window.innerHeight/2)} className="hover:text-white p-1" title="Lähennä"><ZoomIn size={16}/></button>
                 <button onClick={() => performZoom(1/1.5, window.innerWidth/2, window.innerHeight/2)} className="hover:text-white p-1" title="Loitonna"><ZoomOut size={16}/></button>
